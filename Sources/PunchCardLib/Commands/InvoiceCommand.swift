@@ -27,6 +27,9 @@ public struct Invoice: ParsableCommand {
     @Option(name: .long, help: "Output file path (defaults to .punchcard/invoices/).")
     var output: String?
 
+    @Option(name: .long, help: "Path to a logo image to display at the top of the invoice.")
+    var logo: String?
+
     public init() {}
 
     public func run() throws {
@@ -79,7 +82,8 @@ public struct Invoice: ParsableCommand {
             fromDate: fromDate,
             toDate: toDate,
             hourlyRate: rate,
-            lineItems: lineItems
+            lineItems: lineItems,
+            logoPath: logo
         )
 
         let outputURL: URL

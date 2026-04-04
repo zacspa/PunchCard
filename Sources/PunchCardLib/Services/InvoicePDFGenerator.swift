@@ -35,6 +35,23 @@ struct InvoicePDFGenerator {
         // --- Page 1 ---
         startNewPage()
 
+        // Logo watermark (if provided) — drawn first so content renders on top
+        if let logoPath = invoice.logoPath,
+           let dataProvider = CGDataProvider(filename: logoPath),
+           let logoImage = CGImage(pngDataProviderSource: dataProvider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) {
+            let watermarkSize: CGFloat = 400
+            let aspectRatio = CGFloat(logoImage.width) / CGFloat(logoImage.height)
+            let watermarkWidth = aspectRatio >= 1 ? watermarkSize : watermarkSize * aspectRatio
+            let watermarkHeight = aspectRatio >= 1 ? watermarkSize / aspectRatio : watermarkSize
+            let watermarkX = (pageWidth - watermarkWidth) / 2
+            let watermarkY = (pageHeight - watermarkHeight) / 2
+            let watermarkRect = CGRect(x: watermarkX, y: watermarkY, width: watermarkWidth, height: watermarkHeight)
+            context.saveGState()
+            context.setAlpha(0.15)
+            context.draw(logoImage, in: watermarkRect)
+            context.restoreGState()
+        }
+
         // Title and invoice number
         let titleFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 28, nil)
         drawText("INVOICE", at: CGPoint(x: margin, y: yPosition), font: titleFont, color: .black, context: context)
@@ -114,7 +131,7 @@ struct InvoicePDFGenerator {
             // Alternating row shading
             if index % 2 == 0 {
                 let shadingRect = CGRect(x: margin - 5, y: yPosition - rowHeight + rowPadding, width: contentWidth + 10, height: rowHeight)
-                context.setFillColor(CGColor(gray: 0.95, alpha: 1.0))
+                context.setFillColor(CGColor(gray: 0.95, alpha: 0.6))
                 context.fill(shadingRect)
             }
 
@@ -148,20 +165,22 @@ struct InvoicePDFGenerator {
 
         let rightCol: CGFloat = pageWidth - margin - 150
 
+        let rightEdge = pageWidth - margin
+
         drawText("Total Hours:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
-        drawText(String(format: "%.2f", invoice.totalHours), at: CGPoint(x: rightCol + 110, y: yPosition), font: valueNumFont, color: .black, context: context)
+        drawTextRightAligned(String(format: "%.2f", invoice.totalHours), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
         yPosition -= 20
 
         drawText("Rate:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
-        drawText(String(format: "$%.2f/hr", invoice.hourlyRate), at: CGPoint(x: rightCol + 110, y: yPosition), font: valueNumFont, color: .black, context: context)
+        drawTextRightAligned(String(format: "$%.2f/hr", invoice.hourlyRate), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
         yPosition -= 18
 
-        drawHLine(y: yPosition, from: rightCol, to: pageWidth - margin, color: .black, width: 0.5, context: context)
+        drawHLine(y: yPosition, from: rightCol, to: rightEdge, color: .black, width: 0.5, context: context)
         yPosition -= 20
 
         let grandTotalFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 14, nil)
         drawText("Total:", at: CGPoint(x: rightCol, y: yPosition), font: grandTotalFont, color: .black, context: context)
-        drawText(String(format: "$%.2f", invoice.totalAmount), at: CGPoint(x: rightCol + 110, y: yPosition), font: grandTotalFont, color: .black, context: context)
+        drawTextRightAligned(String(format: "$%.2f", invoice.totalAmount), rightEdge: rightEdge, y: yPosition, font: grandTotalFont, color: .black, context: context)
 
         context.endPDFPage()
         context.closePDF()
@@ -179,6 +198,21 @@ struct InvoicePDFGenerator {
 
         context.saveGState()
         context.textPosition = point
+        CTLineDraw(line, context)
+        context.restoreGState()
+    }
+
+    private func drawTextRightAligned(_ text: String, rightEdge: CGFloat, y: CGFloat, font: CTFont, color: CGColor, context: CGContext) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: color,
+        ]
+        let attributedString = NSAttributedString(string: text, attributes: attributes)
+        let line = CTLineCreateWithAttributedString(attributedString)
+        let textWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
+
+        context.saveGState()
+        context.textPosition = CGPoint(x: rightEdge - CGFloat(textWidth), y: y)
         CTLineDraw(line, context)
         context.restoreGState()
     }

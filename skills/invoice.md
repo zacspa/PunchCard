@@ -17,6 +17,7 @@ Generate a PDF invoice for tracked work sessions over a date range.
    - `--client CLIENT` (client/employer name)
    - `--project PROJECT` (optional filter by project)
    - `--output PATH` (optional, defaults to ~/.punchcard/invoices/)
+   - `--logo PATH` (optional, path to a logo image to display as a watermark)
 
    If any required parameter is missing, ask the user for it. Convert natural language dates to yyyy-MM-dd:
    - "last week" = Monday to Sunday of the previous week
@@ -34,7 +35,7 @@ Generate a PDF invoice for tracked work sessions over a date range.
 
 4. **Generate the invoice**:
    ```
-   punchcard invoice --from DATE --to DATE --rate RATE --name "NAME" --client "CLIENT" [--project PROJECT] [--output PATH]
+   punchcard invoice --from DATE --to DATE --rate RATE --name "NAME" --client "CLIENT" [--project PROJECT] [--output PATH] [--logo PATH]
    ```
 
 5. **Report** the output file path, invoice number, and total amount.

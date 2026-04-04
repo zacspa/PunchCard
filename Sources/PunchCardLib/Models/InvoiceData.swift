@@ -8,6 +8,7 @@ public struct InvoiceData: Sendable {
     public let toDate: Date
     public let hourlyRate: Double
     public let lineItems: [InvoiceLineItem]
+    public let logoPath: String?
 
     public var totalHours: Double {
         lineItems.reduce(0) { $0 + $1.hours }
@@ -17,7 +18,7 @@ public struct InvoiceData: Sendable {
         totalHours * hourlyRate
     }
 
-    public init(invoiceNumber: Int, name: String, client: String, fromDate: Date, toDate: Date, hourlyRate: Double, lineItems: [InvoiceLineItem]) {
+    public init(invoiceNumber: Int, name: String, client: String, fromDate: Date, toDate: Date, hourlyRate: Double, lineItems: [InvoiceLineItem], logoPath: String? = nil) {
         self.invoiceNumber = invoiceNumber
         self.name = name
         self.client = client
@@ -25,6 +26,7 @@ public struct InvoiceData: Sendable {
         self.toDate = toDate
         self.hourlyRate = hourlyRate
         self.lineItems = lineItems
+        self.logoPath = logoPath
     }
 }
 
