@@ -106,7 +106,16 @@ public struct SessionStore {
         }
     }
 
+    public struct StopResult {
+        public let session: Session
+        public let clockSkewClamped: Bool
+    }
+
     public func stopSession(summary: String, commits: [String]) throws -> Session {
+        try stopSessionDetailed(summary: summary, commits: commits).session
+    }
+
+    public func stopSessionDetailed(summary: String, commits: [String]) throws -> StopResult {
         try withLock {
             var data = try load()
             guard let index = data.sessions.firstIndex(where: { $0.isActive && !$0.isDeleted }) else {
@@ -115,13 +124,14 @@ public struct SessionStore {
             data.sessions[index].endTime = Date()
             data.sessions[index].summary = summary
             data.sessions[index].commits = commits
-            // Guard against negative durations (clock adjustments)
+            var clamped = false
             if let end = data.sessions[index].endTime,
                end < data.sessions[index].startTime {
                 data.sessions[index].endTime = data.sessions[index].startTime
+                clamped = true
             }
             try save(data)
-            return data.sessions[index]
+            return StopResult(session: data.sessions[index], clockSkewClamped: clamped)
         }
     }
 

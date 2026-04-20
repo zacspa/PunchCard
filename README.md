@@ -109,81 +109,165 @@ PunchCard can POST each completed session to a webhook. The easiest target is a 
 
 ### 1. Create the sheet and script
 
-In a new Google Sheet, go to **Extensions → Apps Script** and paste:
+In a new Google Sheet, go to **Extensions → Apps Script** and paste the following. The script **fails closed** if you leave `SHARED_SECRET` empty — you must set it to a random value and use the same value via `punchcard config set-secret`.
 
 ```javascript
+// Generate with e.g. `openssl rand -hex 32`.
+// MUST be non-empty — the script refuses all requests otherwise.
+const SHARED_SECRET = "";
 const SHEET_NAME = "Sessions";
-const HEADERS = ["ID", "Project", "Start", "End", "Hours", "Summary", "Notes", "Commits", "Deleted"];
-const SHARED_SECRET = ""; // set this and keep it in sync with `punchcard config set-secret`
+const HEADERS = ["ID", "Project", "Start", "End", "Hours", "Summary",
+                 "Notes", "Commits", "Deleted", "LastSyncedAt"];
 
 function doPost(e) {
-  const body = JSON.parse(e.postData.contents);
-  if (SHARED_SECRET && body.secret !== SHARED_SECRET) {
-    return ContentService.createTextOutput("forbidden").setMimeType(ContentService.MimeType.TEXT);
+  // Constant-time secret comparison via the X-PunchCard-Secret header only.
+  if (!SHARED_SECRET) return json_({ok: false, error: "server not configured"}, 500);
+  const provided = (e.parameter && e.parameter.secret) || "";
+  const headerSecret = e.postData && e.postData.contents
+    ? (getHeader_(e, "X-PunchCard-Secret") || provided) : "";
+  if (!constantTimeEquals_(headerSecret, SHARED_SECRET)) {
+    return json_({ok: false, error: "forbidden"}, 403);
   }
 
+  // Serialize concurrent stop/sync calls.
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30_000);
+  try {
+    const body = JSON.parse(e.postData.contents);
+    const sheet = ensureSheet_();
+    const action = body.action || "upsert";
+    const sessions = (body.sessions || []);
+    const scope = body.scope || null;
+
+    // Build a single id→rowIndex map so upsert is O(sessions + rows), not O(n·m).
+    const data = sheet.getDataRange().getValues();
+    const idToRow = {};
+    for (let r = 1; r < data.length; r++) idToRow[data[r][0]] = r + 1;
+
+    let deleted = 0;
+    if (action === "replace" && scope) {
+      // Scoped replace: drop every row matching the filter (regardless of
+      // whether it's in the payload), then the loop below upserts.
+      for (let r = data.length - 1; r >= 1; r--) {
+        if (matchesScope_(data[r], scope)) {
+          sheet.deleteRow(r + 1);
+          deleted++;
+        }
+      }
+      // Rebuild map after deletes.
+      const after = sheet.getDataRange().getValues();
+      for (const k of Object.keys(idToRow)) delete idToRow[k];
+      for (let r = 1; r < after.length; r++) idToRow[after[r][0]] = r + 1;
+    }
+
+    let upserted = 0;
+    const now = new Date().toISOString();
+    for (const s of sessions) {
+      const row = [s.id, s.project, s.startTime, s.endTime || "", s.hours || 0,
+                   s.summary || "", (s.notes || []).join("; "),
+                   (s.commits || []).join("; "), s.deleted ? "yes" : "", now];
+      const existing = idToRow[s.id];
+      if (existing) {
+        sheet.getRange(existing, 1, 1, row.length).setValues([row]);
+      } else {
+        sheet.appendRow(row);
+        idToRow[s.id] = sheet.getLastRow();
+      }
+      upserted++;
+    }
+
+    return json_({ok: true, upserted: upserted, deleted: deleted}, 200);
+  } catch (err) {
+    return json_({ok: false, error: String(err)}, 500);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ensureSheet_() {
   const ss = SpreadsheetApp.getActive();
   let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
     sheet.appendRow(HEADERS);
+    sheet.setFrozenRows(1);
   }
+  return sheet;
+}
 
-  const action = body.action || "upsert";
-  const sessions = body.sessions || [];
-  const data = sheet.getDataRange().getValues();
-
-  if (action === "replace" && sessions.length > 0) {
-    const incomingIds = new Set(sessions.map(s => s.id));
-    for (let r = data.length - 1; r >= 1; r--) {
-      if (incomingIds.has(data[r][0])) sheet.deleteRow(r + 1);
-    }
+function matchesScope_(row, scope) {
+  // row columns: [id, project, startISO, endISO, hours, summary, notes, commits, deleted, syncedAt]
+  const startIso = row[2];
+  if (!startIso) return false;
+  const start = new Date(startIso);
+  if (scope.from && start < new Date(scope.from + "T00:00:00Z")) return false;
+  if (scope.to) {
+    const endOfDay = new Date(scope.to + "T00:00:00Z");
+    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+    if (start >= endOfDay) return false;
   }
+  if (scope.project && row[1] !== scope.project) return false;
+  if (!scope.includeDeleted && row[8] === "yes") return false;
+  return true;
+}
 
-  for (const s of sessions) {
-    const row = [s.id, s.project, s.startTime, s.endTime || "", s.hours || 0,
-                 s.summary || "", (s.notes || []).join("; "), (s.commits || []).join("; "),
-                 s.deleted ? "yes" : ""];
-    // upsert by id
-    let updated = false;
-    for (let r = 1; r < data.length; r++) {
-      if (data[r][0] === s.id) {
-        sheet.getRange(r + 1, 1, 1, row.length).setValues([row]);
-        updated = true;
-        break;
+function getHeader_(e, name) {
+  // Apps Script exposes request headers on `e.headers` for some deployments,
+  // but most do not. Prefer the header; fall back is handled by caller.
+  try {
+    if (e && e.headers) {
+      const lower = name.toLowerCase();
+      for (const k of Object.keys(e.headers)) {
+        if (k.toLowerCase() === lower) return e.headers[k];
       }
     }
-    if (!updated) sheet.appendRow(row);
-  }
+  } catch (_) {}
+  return null;
+}
 
-  return ContentService.createTextOutput(JSON.stringify({ok: true, count: sessions.length}))
+function constantTimeEquals_(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return mismatch === 0;
+}
+
+function json_(obj, status) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
                        .setMimeType(ContentService.MimeType.JSON);
 }
 ```
 
+> **Note on header auth.** Apps Script web apps don't reliably expose custom request headers, so PunchCard also sends the secret as a URL `?secret=...` query parameter as a fallback — the Apps Script checks header-then-query. Always keep the webhook URL private regardless.
+
 ### 2. Deploy as a web app
 
-Click **Deploy → New deployment → Web app**. Set "Execute as: Me" and "Who has access: Anyone with the link". Copy the deployment URL.
+Click **Deploy → New deployment → Web app**. Set "Execute as: Me" and "Who has access: Anyone with the link". Copy the deployment URL. The URL is a bearer capability — treat it like a secret.
 
 ### 3. Point PunchCard at it
 
 ```bash
-punchcard config set-webhook "https://script.google.com/macros/s/AKfycb.../exec"
-# optional shared secret (must match SHARED_SECRET in the Apps Script):
-punchcard config set-secret "some-long-random-string"
+# Webhook URL (positional) or --stdin to avoid shell-history leakage
+punchcard config set-webhook --stdin
+
+# Shared secret: with no argument, prompts with echo off
+punchcard config set-secret
 ```
 
-From then on, every `punchcard stop` pushes that session to the sheet. Pass `--no-sync` to skip for a single invocation, or `punchcard config disable` to pause.
+From then on, every `punchcard stop`, `edit`, `delete`, and `undelete` pushes to the sheet (sub-7-second timeout; failures queue locally). Pass `--no-sync` to skip for a single invocation, or `punchcard config disable` to pause entirely.
 
-To backfill history or reconcile after edits:
+To backfill history, flush queued failures, or reconcile after edits:
 
 ```bash
-punchcard sync                                   # upsert every completed session
-punchcard sync --from 2026-04-01 --to 2026-04-30 # scoped range
-punchcard sync --replace                         # remove and re-append rows in scope
+punchcard sync                                       # upsert every completed session
+punchcard sync --from 2026-04-01 --to 2026-04-30     # scoped range
+punchcard sync --from 2026-04-01 --to 2026-04-30 --replace
+                                                     # delete all rows in scope on the sheet, then append
+punchcard sync --flush-queue                         # retry sessions that failed earlier
 ```
 
-The webhook URL is a capability — treat it like a secret. It is stored at `~/.punchcard/sync.json` (chmod 600).
+The webhook URL and shared secret live in `~/.punchcard/sync.json` (mode 0600). `punchcard config show` redacts the URL by default — pass `--reveal` to print it in full.
 
 ## Data storage
 

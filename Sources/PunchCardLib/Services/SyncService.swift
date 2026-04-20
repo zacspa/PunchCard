@@ -1,20 +1,28 @@
 import Foundation
 
-/// Posts session data to a user-configured webhook (e.g. a Google Apps Script
-/// bound to a Sheet). Intentionally best-effort: sync failures should print a
-/// warning but never block a stop/edit from persisting locally.
+/// Posts session data to a user-configured webhook. Best-effort: network
+/// failures enqueue the session to a local retry queue so the next successful
+/// sync can flush them. The `stop` command never blocks for long and never
+/// fails solely because sync failed.
 public struct SyncService {
+    public static let requestTimeout: TimeInterval = 5
+    public static let overallTimeout: TimeInterval = 7
+    public static let batchSize = 100
+
     private let configFile: URL
+    private let queueFile: URL
     private let dataDir: URL
 
     public init() {
         self.dataDir = Paths.dataDir
         self.configFile = Paths.syncConfigFile
+        self.queueFile = Paths.syncQueueFile
     }
 
     public init(directory: URL) {
         self.dataDir = directory
         self.configFile = directory.appendingPathComponent("sync.json")
+        self.queueFile = directory.appendingPathComponent("sync-queue.json")
     }
 
     // MARK: - Config
@@ -32,9 +40,58 @@ public struct SyncService {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(config)
-        try data.write(to: configFile, options: .atomic)
-        // Tighten permissions — file contains the webhook URL / shared secret.
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configFile.path)
+        try writeRestricted(data: data, to: configFile)
+    }
+
+    // MARK: - Retry queue
+
+    public func loadQueue() throws -> [String] {
+        guard FileManager.default.fileExists(atPath: queueFile.path) else {
+            return []
+        }
+        let data = try Data(contentsOf: queueFile)
+        return try JSONDecoder().decode([String].self, from: data)
+    }
+
+    public func saveQueue(_ ids: [String]) throws {
+        try Paths.ensureDirectoryExists(dataDir)
+        if ids.isEmpty {
+            try? FileManager.default.removeItem(at: queueFile)
+            return
+        }
+        let data = try JSONEncoder().encode(ids)
+        try writeRestricted(data: data, to: queueFile)
+    }
+
+    public func enqueueFailure(sessionID: UUID) throws {
+        var ids = (try? loadQueue()) ?? []
+        let s = sessionID.uuidString
+        if !ids.contains(s) {
+            ids.append(s)
+            try saveQueue(ids)
+        }
+    }
+
+    /// Writes data with owner-only permissions (0o600) atomically. Creates the
+    /// file with restricted perms up front so there is no brief 0o644 window.
+    private func writeRestricted(data: Data, to url: URL) throws {
+        let fm = FileManager.default
+        // Write to a temp file with 0o600, then rename into place.
+        let tmp = url.appendingPathExtension("tmp")
+        if fm.fileExists(atPath: tmp.path) {
+            try fm.removeItem(at: tmp)
+        }
+        let created = fm.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600])
+        guard created else {
+            throw SyncError.localIO("Failed to create \(tmp.path)")
+        }
+        if fm.fileExists(atPath: url.path) {
+            _ = try? fm.replaceItemAt(url, withItemAt: tmp)
+        } else {
+            try fm.moveItem(at: tmp, to: url)
+        }
+        // Belt-and-suspenders in case replaceItemAt copied default attrs from old.
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     // MARK: - Payload
@@ -49,6 +106,20 @@ public struct SyncService {
         public let notes: [String]
         public let commits: [String]
         public let deleted: Bool
+    }
+
+    public struct ReplaceScope: Codable, Sendable {
+        public let from: String?
+        public let to: String?
+        public let project: String?
+        public let includeDeleted: Bool
+
+        public init(from: String? = nil, to: String? = nil, project: String? = nil, includeDeleted: Bool = false) {
+            self.from = from
+            self.to = to
+            self.project = project
+            self.includeDeleted = includeDeleted
+        }
     }
 
     public static func makePayload(_ session: Session) -> SessionPayload {
@@ -67,59 +138,121 @@ public struct SyncService {
 
     // MARK: - Post
 
-    /// Post a single session to the webhook. Returns the HTTP status; throws on
-    /// network / encoding errors.
+    /// Push a single session as an upsert. On any failure, record the session
+    /// ID in the retry queue so `punchcard sync --flush-queue` can retry it.
+    /// Returns the HTTP status on success; throws on failure.
     @discardableResult
     public func push(_ session: Session, action: String = "upsert") throws -> Int {
         let config = try loadConfig()
-        guard config.isConfigured else {
-            throw SyncError.notConfigured
-        }
-        return try post(
-            url: URL(string: config.webhookURL!)!,
-            secret: config.sharedSecret,
-            body: [
-                "action": action,
-                "secret": config.sharedSecret as Any,
-                "sessions": [Self.makePayload(session)],
-            ].compactMapValues { $0 is NSNull ? nil : $0 }
-        )
+        guard config.isConfigured else { throw SyncError.notConfigured }
+        let url = try Self.validateHTTPSURL(config.webhookURL)
+        let payload = [Self.makePayload(session)]
+        let envelope: [String: Any] = [
+            "action": action,
+            "sessions": payload.map(Self.payloadDict),
+        ]
+        return try post(url: url, secret: config.sharedSecret, body: envelope)
     }
 
-    /// Post multiple sessions in one request (used by `punchcard sync`).
+    /// Push multiple sessions. Batches to `batchSize` per request. Returns the
+    /// last HTTP status on success; throws on first failure.
     @discardableResult
-    public func pushAll(_ sessions: [Session], action: String = "replace") throws -> Int {
+    public func pushAll(
+        _ sessions: [Session],
+        action: String = "upsert",
+        replaceScope: ReplaceScope? = nil
+    ) throws -> Int {
         let config = try loadConfig()
-        guard config.isConfigured else {
-            throw SyncError.notConfigured
+        guard config.isConfigured else { throw SyncError.notConfigured }
+        let url = try Self.validateHTTPSURL(config.webhookURL)
+
+        if sessions.isEmpty {
+            // Still honor a scoped replace with an empty payload (pure delete).
+            if action == "replace", let scope = replaceScope {
+                var envelope: [String: Any] = [
+                    "action": "replace",
+                    "sessions": [[String: Any]](),
+                ]
+                envelope["scope"] = Self.scopeDict(scope)
+                return try post(url: url, secret: config.sharedSecret, body: envelope)
+            }
+            return 200
         }
-        let payload = sessions.map(Self.makePayload)
-        return try post(
-            url: URL(string: config.webhookURL!)!,
-            secret: config.sharedSecret,
-            body: [
+
+        var lastStatus = 0
+        let chunks = stride(from: 0, to: sessions.count, by: Self.batchSize).map {
+            Array(sessions[$0..<min($0 + Self.batchSize, sessions.count)])
+        }
+
+        for (index, chunk) in chunks.enumerated() {
+            var envelope: [String: Any] = [
                 "action": action,
-                "secret": config.sharedSecret as Any,
-                "sessions": payload,
-            ].compactMapValues { $0 is NSNull ? nil : $0 }
-        )
+                "sessions": chunk.map { Self.payloadDict(Self.makePayload($0)) },
+            ]
+            // Replace scope only applies on the first chunk; later chunks upsert.
+            if action == "replace", index == 0, let scope = replaceScope {
+                envelope["scope"] = Self.scopeDict(scope)
+            } else if action == "replace" {
+                envelope["action"] = "upsert"
+            }
+            lastStatus = try post(url: url, secret: config.sharedSecret, body: envelope)
+        }
+        return lastStatus
+    }
+
+    private static func payloadDict(_ p: SessionPayload) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": p.id,
+            "project": p.project,
+            "startTime": p.startTime,
+            "notes": p.notes,
+            "commits": p.commits,
+            "deleted": p.deleted,
+        ]
+        if let end = p.endTime { d["endTime"] = end }
+        if let hours = p.hours { d["hours"] = hours }
+        if let summary = p.summary { d["summary"] = summary }
+        return d
+    }
+
+    private static func scopeDict(_ s: ReplaceScope) -> [String: Any] {
+        var d: [String: Any] = ["includeDeleted": s.includeDeleted]
+        if let f = s.from { d["from"] = f }
+        if let t = s.to { d["to"] = t }
+        if let p = s.project { d["project"] = p }
+        return d
     }
 
     private func post(url: URL, secret: String?, body: [String: Any]) throws -> Int {
         let jsonData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
-        var request = URLRequest(url: url)
+        // Apps Script web apps can't reliably read custom request headers, so
+        // we also carry the secret as a query parameter. Neither channel is
+        // written to the JSON body (which Apps Script logs verbatim).
+        let finalURL: URL = {
+            guard let secret = secret, !secret.isEmpty else { return url }
+            guard var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+            var items = comps.queryItems ?? []
+            items.removeAll { $0.name == "secret" }
+            items.append(URLQueryItem(name: "secret", value: secret))
+            comps.queryItems = items
+            return comps.url ?? url
+        }()
+        var request = URLRequest(url: finalURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let secret = secret, !secret.isEmpty {
             request.setValue(secret, forHTTPHeaderField: "X-PunchCard-Secret")
         }
         request.httpBody = jsonData
-        request.timeoutInterval = 15
+        request.timeoutInterval = Self.requestTimeout
+
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.finishTasksAndInvalidate() }
 
         let result = PostResult()
         let semaphore = DispatchSemaphore(value: 0)
 
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+        let task = session.dataTask(with: request) { data, response, error in
             defer { semaphore.signal() }
             if let error = error {
                 result.set(errorMessage: error.localizedDescription)
@@ -130,7 +263,11 @@ public struct SyncService {
             }
         }
         task.resume()
-        _ = semaphore.wait(timeout: .now() + 20)
+        let waitResult = semaphore.wait(timeout: .now() + Self.overallTimeout)
+        if waitResult == .timedOut {
+            task.cancel()
+            throw SyncError.network("Timed out after \(Int(Self.overallTimeout))s")
+        }
 
         let snapshot = result.snapshot()
         if let errorMessage = snapshot.errorMessage {
@@ -140,13 +277,65 @@ public struct SyncService {
             let msg = snapshot.body.flatMap { String(data: $0, encoding: .utf8) } ?? ""
             throw SyncError.badStatus(snapshot.status, msg)
         }
-        return snapshot.status
+        // Defend against 200-with-HTML (misconfigured / revoked Apps Script).
+        guard let data = snapshot.body else {
+            throw SyncError.badStatus(snapshot.status, "Empty response body")
+        }
+        let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let dict = parsed else {
+            let preview = String(data: data, encoding: .utf8)?.prefix(120) ?? ""
+            throw SyncError.badResponse("Response was not JSON (looks like HTML or a login page): \(preview)")
+        }
+        if let ok = dict["ok"] as? Bool, ok { return snapshot.status }
+        // Accept some responses that don't set `ok` but signal success another way.
+        if let error = dict["error"] as? String {
+            throw SyncError.badResponse("Server reported error: \(error)")
+        }
+        throw SyncError.badResponse("Response JSON did not include ok:true — \(dict)")
+    }
+
+    public static func validateHTTPSURL(_ string: String?) throws -> URL {
+        guard let s = string, !s.isEmpty else { throw SyncError.notConfigured }
+        guard let url = URL(string: s) else {
+            throw SyncError.network("Webhook URL is not parseable: \(s)")
+        }
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" else {
+            throw SyncError.network("Webhook URL must use https (got '\(url.scheme ?? "none")').")
+        }
+        guard url.host != nil else {
+            throw SyncError.network("Webhook URL must include a host.")
+        }
+        return url
+    }
+}
+
+public enum SyncError: Error, CustomStringConvertible, Equatable {
+    case notConfigured
+    case network(String)
+    case badStatus(Int, String)
+    case badResponse(String)
+    case localIO(String)
+
+    public var description: String {
+        switch self {
+        case .notConfigured:
+            return "Sheet sync is not configured. Run `punchcard config set-webhook <URL>` first."
+        case .network(let msg):
+            return "Sheet sync network error: \(msg)"
+        case .badStatus(let code, let body):
+            let snippet = body.prefix(200)
+            return "Sheet sync failed (HTTP \(code)): \(snippet)"
+        case .badResponse(let msg):
+            return "Sheet sync rejected response: \(msg)"
+        case .localIO(let msg):
+            return "Sheet sync local I/O error: \(msg)"
+        }
     }
 }
 
 /// Thread-safe result holder for the URLSession completion callback.
-/// Keeps mutation off captured local vars so the Swift 6 concurrency checker
-/// can prove the closure is Sendable.
+/// Keeps mutation off captured local vars so Swift 6 concurrency checking
+/// passes without `@unchecked Sendable` on the closure itself.
 private final class PostResult: @unchecked Sendable {
     private let lock = NSLock()
     private var _status: Int = -1
@@ -173,23 +362,5 @@ private final class PostResult: @unchecked Sendable {
     func snapshot() -> Snapshot {
         lock.lock(); defer { lock.unlock() }
         return Snapshot(status: _status, body: _body, errorMessage: _errorMessage)
-    }
-}
-
-public enum SyncError: Error, CustomStringConvertible, Equatable {
-    case notConfigured
-    case network(String)
-    case badStatus(Int, String)
-
-    public var description: String {
-        switch self {
-        case .notConfigured:
-            return "Sheet sync is not configured. Run `punchcard config set-webhook <URL>` first."
-        case .network(let msg):
-            return "Sheet sync network error: \(msg)"
-        case .badStatus(let code, let body):
-            let snippet = body.prefix(200)
-            return "Sheet sync failed (HTTP \(code)): \(snippet)"
-        }
     }
 }

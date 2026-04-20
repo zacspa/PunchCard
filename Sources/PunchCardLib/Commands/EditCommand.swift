@@ -18,6 +18,9 @@ public struct Edit: ParsableCommand {
     @Option(name: .long, help: "Change the end time (ISO 8601 format, e.g. 2026-03-30T17:00:00Z).")
     var endTime: String?
 
+    @Flag(name: .long, help: "Skip the Google Sheet sync for this edit.")
+    var noSync: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -55,6 +58,7 @@ public struct Edit: ParsableCommand {
             summary: summary,
             endTime: parsedEndTime
         )
+        SyncDispatcher.pushBestEffort(session, noSync: noSync)
 
         print("Session updated:")
         print("  ID:       \(session.id.uuidString)")

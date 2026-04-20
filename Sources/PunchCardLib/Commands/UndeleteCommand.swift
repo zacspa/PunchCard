@@ -9,6 +9,9 @@ public struct Undelete: ParsableCommand {
     @Option(name: .long, help: "Session UUID to restore.")
     var id: String
 
+    @Flag(name: .long, help: "Skip the Google Sheet sync for this restore.")
+    var noSync: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -18,6 +21,7 @@ public struct Undelete: ParsableCommand {
 
         let store = SessionStore()
         let session = try store.undeleteSession(id: uuid)
+        SyncDispatcher.pushBestEffort(session, noSync: noSync)
 
         print("Session restored:")
         print("  ID:       \(session.id.uuidString)")

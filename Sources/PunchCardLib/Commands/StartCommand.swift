@@ -35,16 +35,19 @@ public struct Start: ParsableCommand {
             throw ValidationError("Pass either --at or --ago, not both.")
         }
         if let atValue = at {
-            guard let parsed = TimeParser.parseAt(atValue) else {
-                throw ValidationError("Could not parse --at '\(atValue)'. Try \"09:15\", \"12:00pm\", \"2026-04-18 09:00\", or ISO 8601.")
+            do {
+                return try TimeParser.parseAt(atValue)
+            } catch let error as TimeParser.Error {
+                throw ValidationError(error.description)
             }
-            return parsed
         }
         if let agoValue = ago {
-            guard let seconds = TimeParser.parseDuration(agoValue) else {
-                throw ValidationError("Could not parse --ago '\(agoValue)'. Try \"30m\", \"1h\", or \"1h30m\".")
+            do {
+                let seconds = try TimeParser.parseDuration(agoValue)
+                return Date().addingTimeInterval(-seconds)
+            } catch let error as TimeParser.Error {
+                throw ValidationError(error.description)
             }
-            return Date().addingTimeInterval(-seconds)
         }
         return Date()
     }

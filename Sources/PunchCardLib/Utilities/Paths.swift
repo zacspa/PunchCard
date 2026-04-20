@@ -23,6 +23,10 @@ public enum Paths {
         dataDir.appendingPathComponent("sync.json")
     }
 
+    public static var syncQueueFile: URL {
+        dataDir.appendingPathComponent("sync-queue.json")
+    }
+
     /// Lock file for session read-modify-write operations
     public static var lockFile: URL {
         dataDir.appendingPathComponent(".lock")

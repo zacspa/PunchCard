@@ -19,12 +19,20 @@ public struct Sync: ParsableCommand {
     @Flag(name: .long, help: "Include soft-deleted sessions in the push (for reconciliation).")
     var includeDeleted: Bool = false
 
-    @Flag(name: .long, help: "Send 'replace' so the remote clears rows in scope before appending. Default is 'upsert'.")
+    @Flag(name: .long, help: "Replace rows in the filter scope on the remote sheet before appending. Deletes rows outside the local payload.")
     var replace: Bool = false
+
+    @Flag(name: .long, help: "Only flush sessions queued after prior sync failures (ignores other filters).")
+    var flushQueue: Bool = false
 
     public init() {}
 
     public func run() throws {
+        if flushQueue {
+            try runFlushQueue()
+            return
+        }
+
         let fromDate = try parseDate(from, label: "--from")
         let toDate = try parseDate(to, label: "--to")
 
@@ -43,14 +51,70 @@ public struct Sync: ParsableCommand {
             return true
         }
 
-        if sessions.isEmpty {
+        if sessions.isEmpty && !replace {
             print("No sessions match the filter — nothing to sync.")
             return
         }
 
         let sync = SyncService()
-        let status = try sync.pushAll(sessions, action: replace ? "replace" : "upsert")
-        print("Pushed \(sessions.count) session\(sessions.count == 1 ? "" : "s") (HTTP \(status)).")
+        let scope = replace
+            ? SyncService.ReplaceScope(
+                from: from,
+                to: to,
+                project: project,
+                includeDeleted: includeDeleted
+            )
+            : nil
+        let status = try sync.pushAll(
+            sessions,
+            action: replace ? "replace" : "upsert",
+            replaceScope: scope
+        )
+        let label = replace ? "replaced" : "upserted"
+        print("Pushed \(sessions.count) session\(sessions.count == 1 ? "" : "s") (\(label), HTTP \(status)).")
+
+        // Opportunistic: flush the failure queue after a successful push.
+        try? flushQueueQuietly()
+    }
+
+    private func runFlushQueue() throws {
+        let sync = SyncService()
+        let queuedIDs = Set((try? sync.loadQueue()) ?? [])
+        if queuedIDs.isEmpty {
+            print("Retry queue is empty.")
+            return
+        }
+        let store = SessionStore()
+        let data = try store.loadSessions()
+        let sessions = data.sessions.filter {
+            queuedIDs.contains($0.id.uuidString) && !$0.isActive
+        }
+        if sessions.isEmpty {
+            try sync.saveQueue([]) // queue references sessions that no longer exist
+            print("Queue contained only stale IDs — cleared.")
+            return
+        }
+        let status = try sync.pushAll(sessions, action: "upsert")
+        try sync.saveQueue([]) // all flushed
+        print("Flushed \(sessions.count) queued session\(sessions.count == 1 ? "" : "s") (HTTP \(status)).")
+    }
+
+    private func flushQueueQuietly() throws {
+        let sync = SyncService()
+        let queuedIDs = Set((try? sync.loadQueue()) ?? [])
+        if queuedIDs.isEmpty { return }
+        let store = SessionStore()
+        let data = try store.loadSessions()
+        let sessions = data.sessions.filter {
+            queuedIDs.contains($0.id.uuidString) && !$0.isActive
+        }
+        if sessions.isEmpty {
+            try? sync.saveQueue([])
+            return
+        }
+        if (try? sync.pushAll(sessions, action: "upsert")) != nil {
+            try? sync.saveQueue([])
+        }
     }
 
     private func parseDate(_ value: String?, label: String) throws -> Date? {

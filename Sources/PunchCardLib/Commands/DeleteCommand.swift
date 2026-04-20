@@ -9,6 +9,9 @@ public struct Delete: ParsableCommand {
     @Option(name: .long, help: "Session UUID (use `punchcard list --show-ids` to find it).")
     var id: String
 
+    @Flag(name: .long, help: "Skip the Google Sheet sync for this delete.")
+    var noSync: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -18,6 +21,7 @@ public struct Delete: ParsableCommand {
 
         let store = SessionStore()
         let session = try store.deleteSession(id: uuid)
+        SyncDispatcher.pushBestEffort(session, noSync: noSync)
 
         print("Session deleted:")
         print("  ID:       \(session.id.uuidString)")

@@ -18,8 +18,11 @@ Begin tracking a new work session using the PunchCard CLI.
      - `/punch-in 30 minutes ago`
      - `/punch-in Acme 1h ago`
      - `/punch-in at 2026-04-18 09:00`
+     - `/punch-in yesterday at 11:30pm`
 
-   Extract the project name and, if present, a time phrase. If the phrase begins with "at", pass the remainder to `--at`. If it ends with "ago", convert to `--ago` (e.g. "30 minutes ago" → `--ago 30m`, "1h ago" → `--ago 1h`, "an hour ago" → `--ago 1h`).
+   Extract the project name and, if present, a time phrase. If the phrase ends with "ago", convert to `--ago` (e.g. "30 minutes ago" → `--ago 30m`, "1h ago" → `--ago 1h`, "an hour ago" → `--ago 1h`, "half an hour ago" → `--ago 30m`). Otherwise pass the time to `--at`.
+
+   **Important:** the CLI rejects a time-only `--at` that resolves to later today (no silent rollback to yesterday). If the user says "yesterday at 11:30pm", "last night at X", or anything that crosses midnight, you MUST compute the absolute date yourself and pass `--at "YYYY-MM-DD HH:mm"` (or full ISO 8601). Today's date is available from system context.
 
 3. **If no project name was provided**, list available projects:
    ```

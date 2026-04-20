@@ -53,7 +53,8 @@ public struct Stop: ParsableCommand {
         }
 
         let store = SessionStore()
-        let session = try store.stopSession(summary: resolvedSummary, commits: commitList)
+        let result = try store.stopSessionDetailed(summary: resolvedSummary, commits: commitList)
+        let session = result.session
         print("Session stopped for '\(session.project)'")
         print("Duration: \(session.formattedDuration)")
         if let hours = session.hours {
@@ -62,17 +63,10 @@ public struct Stop: ParsableCommand {
         if !commitList.isEmpty {
             print("Commits captured: \(commitList.count)")
         }
-
-        if !noSync {
-            let sync = SyncService()
-            if let config = try? sync.loadConfig(), config.isConfigured {
-                do {
-                    try sync.push(session)
-                    print("Synced to sheet.")
-                } catch {
-                    FileHandle.standardError.write(Data("Warning: sheet sync failed — \(error)\n".utf8))
-                }
-            }
+        if result.clockSkewClamped {
+            FileHandle.standardError.write(Data("Warning: end time was earlier than start time (likely clock skew). Duration clamped to zero — use `punchcard edit --end-time <ISO8601>` to fix it.\n".utf8))
         }
+
+        SyncDispatcher.pushBestEffort(session, noSync: noSync)
     }
 }
