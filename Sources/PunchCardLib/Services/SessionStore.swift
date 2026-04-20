@@ -74,7 +74,7 @@ public struct SessionStore {
         }
     }
 
-    public func startSession(project: String) throws -> Session {
+    public func startSession(project: String, startTime: Date = Date()) throws -> Session {
         try withLock {
             var data = try load()
             if let active = data.sessions.first(where: { $0.isActive && !$0.isDeleted }) {
@@ -83,7 +83,23 @@ public struct SessionStore {
                     since: DateFormatting.formatDisplay(active.startTime)
                 )
             }
-            let session = Session(project: project)
+            // Reject future start times (allow tiny clock skew)
+            if startTime.timeIntervalSinceNow > 60 {
+                throw PunchCardError.invalidStartTime(
+                    reason: "Start time \(DateFormatting.formatDisplay(startTime)) is in the future."
+                )
+            }
+            // Reject overlap with the most recent completed session
+            let lastEnd = data.sessions
+                .filter { !$0.isDeleted }
+                .compactMap { $0.endTime }
+                .max()
+            if let lastEnd = lastEnd, startTime < lastEnd {
+                throw PunchCardError.invalidStartTime(
+                    reason: "Start time \(DateFormatting.formatDisplay(startTime)) overlaps previous session (ended \(DateFormatting.formatDisplay(lastEnd))). Use `punchcard edit` to adjust the prior session first."
+                )
+            }
+            let session = Session(project: project, startTime: startTime)
             data.sessions.append(session)
             try save(data)
             return session
@@ -242,6 +258,7 @@ public enum PunchCardError: Error, CustomStringConvertible, Equatable {
     case noSessionsInRange
     case lockFailed
     case sessionNotFound(id: String)
+    case invalidStartTime(reason: String)
 
     public var description: String {
         switch self {
@@ -257,6 +274,8 @@ public enum PunchCardError: Error, CustomStringConvertible, Equatable {
             return "No completed sessions found in the specified date range."
         case .lockFailed:
             return "Failed to acquire file lock on ~/.punchcard/.lock"
+        case .invalidStartTime(let reason):
+            return reason
         }
     }
 }

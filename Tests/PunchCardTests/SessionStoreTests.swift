@@ -197,4 +197,38 @@ struct SessionStoreTests {
         // Duration should never be negative
         #expect(stopped.hours! >= 0)
     }
+
+    @Test("Start with a backdated time")
+    func startWithBackdatedTime() throws {
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let store = SessionStore(directory: tempDir)
+        let backdated = Date().addingTimeInterval(-3600) // one hour ago
+        let session = try store.startSession(project: "TestProject", startTime: backdated)
+        #expect(abs(session.startTime.timeIntervalSince(backdated)) < 1)
+    }
+
+    @Test("Start with a future time is rejected")
+    func startWithFutureTimeFails() throws {
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let store = SessionStore(directory: tempDir)
+        let future = Date().addingTimeInterval(3600)
+
+        #expect(throws: PunchCardError.self) {
+            _ = try store.startSession(project: "TestProject", startTime: future)
+        }
+    }
+
+    @Test("Start with a time before a prior session's end is rejected")
+    func startOverlappingPrior() throws {
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let store = SessionStore(directory: tempDir)
+        _ = try store.startSession(project: "TestProject")
+        _ = try store.stopSession(summary: "done", commits: [])
+
+        // Pick a start time clearly before the previous session ended
+        let overlapping = Date().addingTimeInterval(-3600)
+        #expect(throws: PunchCardError.self) {
+            _ = try store.startSession(project: "TestProject", startTime: overlapping)
+        }
+    }
 }

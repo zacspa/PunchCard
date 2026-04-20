@@ -37,10 +37,10 @@ public struct Session: Codable, Identifiable, Sendable {
         return "\(h)h \(m)m"
     }
 
-    public init(project: String) {
+    public init(project: String, startTime: Date = Date()) {
         self.id = UUID()
         self.project = project
-        self.startTime = Date()
+        self.startTime = startTime
         self.endTime = nil
         self.notes = []
         self.summary = nil

@@ -19,6 +19,10 @@ public enum Paths {
         dataDir.appendingPathComponent("invoices")
     }
 
+    public static var syncConfigFile: URL {
+        dataDir.appendingPathComponent("sync.json")
+    }
+
     /// Lock file for session read-modify-write operations
     public static var lockFile: URL {
         dataDir.appendingPathComponent(".lock")

@@ -18,6 +18,9 @@ public struct Stop: ParsableCommand {
     @Option(name: .long, help: "Path to a file containing commit summaries (one per line).")
     var commitsFile: String?
 
+    @Flag(name: .long, help: "Skip the Google Sheet sync for this stop, even if configured.")
+    var noSync: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -58,6 +61,18 @@ public struct Stop: ParsableCommand {
         }
         if !commitList.isEmpty {
             print("Commits captured: \(commitList.count)")
+        }
+
+        if !noSync {
+            let sync = SyncService()
+            if let config = try? sync.loadConfig(), config.isConfigured {
+                do {
+                    try sync.push(session)
+                    print("Synced to sheet.")
+                } catch {
+                    FileHandle.standardError.write(Data("Warning: sheet sync failed — \(error)\n".utf8))
+                }
+            }
         }
     }
 }

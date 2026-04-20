@@ -40,8 +40,13 @@ cp skills/invoice.md ~/.claude/commands/
 # Register a project
 punchcard project add "Acme Corp"
 
-# Start tracking
+# Start tracking (right now)
 punchcard start --project "Acme Corp"
+
+# Or backdate the start — I forgot to punch in earlier
+punchcard start --project "Acme Corp" --at "9:15am"
+punchcard start --project "Acme Corp" --ago 30m
+punchcard start --project "Acme Corp" --at "2026-04-18 09:00"
 
 # Log notes during work
 punchcard log "Fixed authentication bug"
@@ -69,8 +74,16 @@ punchcard export --output ~/invoices/march-2026.csv
 | Command | Description |
 |---|---|
 | `start --project NAME` | Start a work session |
+| `start --at "9:15am"` | Backdate the start to a time today (also accepts ISO 8601 and `yyyy-MM-dd HH:mm`) |
+| `start --ago 30m` | Backdate the start by a relative duration (`30m`, `1h`, `1h30m`) |
 | `stop --summary TEXT` | Stop session with a summary |
 | `stop --summary-file PATH` | Stop session with summary from a file (avoids shell escaping) |
+| `stop --no-sync` | Stop without pushing to the configured Google Sheet |
+| `sync` | Push all completed sessions to the configured sheet (supports `--from`/`--to`/`--project`) |
+| `config show` | Inspect sync configuration |
+| `config set-webhook URL` | Point sync at a Google Apps Script / HTTP webhook |
+| `config set-secret SECRET` | Optional shared secret sent as `X-PunchCard-Secret` |
+| `config enable` / `config disable` | Toggle sync without deleting the URL |
 | `log "NOTE"` | Add a note to the active session |
 | `status` | Show active session info |
 | `list` | List completed sessions |
@@ -90,6 +103,88 @@ With the skills installed, you can use natural language commands in Claude Code:
 - **`/punch-out`** -- Claude summarizes the session from conversation context, captures git commits, and stops tracking
 - **`/invoice last two weeks at $150/hr for Acme Corp`** -- Claude converts natural language dates, previews sessions, and generates a PDF
 
+## Google Sheet sync (optional)
+
+PunchCard can POST each completed session to a webhook. The easiest target is a Google Apps Script bound to a Sheet, deployed as a web app.
+
+### 1. Create the sheet and script
+
+In a new Google Sheet, go to **Extensions → Apps Script** and paste:
+
+```javascript
+const SHEET_NAME = "Sessions";
+const HEADERS = ["ID", "Project", "Start", "End", "Hours", "Summary", "Notes", "Commits", "Deleted"];
+const SHARED_SECRET = ""; // set this and keep it in sync with `punchcard config set-secret`
+
+function doPost(e) {
+  const body = JSON.parse(e.postData.contents);
+  if (SHARED_SECRET && body.secret !== SHARED_SECRET) {
+    return ContentService.createTextOutput("forbidden").setMimeType(ContentService.MimeType.TEXT);
+  }
+
+  const ss = SpreadsheetApp.getActive();
+  let sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_NAME);
+    sheet.appendRow(HEADERS);
+  }
+
+  const action = body.action || "upsert";
+  const sessions = body.sessions || [];
+  const data = sheet.getDataRange().getValues();
+
+  if (action === "replace" && sessions.length > 0) {
+    const incomingIds = new Set(sessions.map(s => s.id));
+    for (let r = data.length - 1; r >= 1; r--) {
+      if (incomingIds.has(data[r][0])) sheet.deleteRow(r + 1);
+    }
+  }
+
+  for (const s of sessions) {
+    const row = [s.id, s.project, s.startTime, s.endTime || "", s.hours || 0,
+                 s.summary || "", (s.notes || []).join("; "), (s.commits || []).join("; "),
+                 s.deleted ? "yes" : ""];
+    // upsert by id
+    let updated = false;
+    for (let r = 1; r < data.length; r++) {
+      if (data[r][0] === s.id) {
+        sheet.getRange(r + 1, 1, 1, row.length).setValues([row]);
+        updated = true;
+        break;
+      }
+    }
+    if (!updated) sheet.appendRow(row);
+  }
+
+  return ContentService.createTextOutput(JSON.stringify({ok: true, count: sessions.length}))
+                       .setMimeType(ContentService.MimeType.JSON);
+}
+```
+
+### 2. Deploy as a web app
+
+Click **Deploy → New deployment → Web app**. Set "Execute as: Me" and "Who has access: Anyone with the link". Copy the deployment URL.
+
+### 3. Point PunchCard at it
+
+```bash
+punchcard config set-webhook "https://script.google.com/macros/s/AKfycb.../exec"
+# optional shared secret (must match SHARED_SECRET in the Apps Script):
+punchcard config set-secret "some-long-random-string"
+```
+
+From then on, every `punchcard stop` pushes that session to the sheet. Pass `--no-sync` to skip for a single invocation, or `punchcard config disable` to pause.
+
+To backfill history or reconcile after edits:
+
+```bash
+punchcard sync                                   # upsert every completed session
+punchcard sync --from 2026-04-01 --to 2026-04-30 # scoped range
+punchcard sync --replace                         # remove and re-append rows in scope
+```
+
+The webhook URL is a capability — treat it like a secret. It is stored at `~/.punchcard/sync.json` (chmod 600).
+
 ## Data storage
 
 All data is stored in `~/.punchcard/`:
@@ -99,6 +194,7 @@ All data is stored in `~/.punchcard/`:
 | `sessions.json` | All session data (including soft-deleted) |
 | `sessions.json.bak` | Auto-backup of previous state |
 | `projects.json` | Registered project names |
+| `sync.json` | Google Sheet webhook config (chmod 600; contains URL + optional secret) |
 | `invoice-counter.txt` | Auto-incrementing invoice number |
 | `invoices/` | Generated PDF invoices |
 
