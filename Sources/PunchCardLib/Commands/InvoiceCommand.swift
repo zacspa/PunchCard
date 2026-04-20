@@ -24,6 +24,18 @@ public struct Invoice: ParsableCommand {
     @Option(name: .long, help: "Filter by project name.")
     var project: String?
 
+    @Option(name: .long, help: "Your email address.")
+    var email: String?
+
+    @Option(name: .long, help: "Client address or billing contact.")
+    var clientAddress: String?
+
+    @Option(name: .long, help: "Payment terms (e.g. \"Net 30\", \"Due upon receipt\").")
+    var terms: String?
+
+    @Option(name: .long, help: "Payment method/instructions (e.g. \"CashApp $handle\").")
+    var paymentMethod: String?
+
     @Option(name: .long, help: "Output file path (defaults to .punchcard/invoices/).")
     var output: String?
 
@@ -83,7 +95,11 @@ public struct Invoice: ParsableCommand {
             toDate: toDate,
             hourlyRate: rate,
             lineItems: lineItems,
-            logoPath: logo
+            logoPath: logo,
+            email: email,
+            clientAddress: clientAddress,
+            terms: terms,
+            paymentMethod: paymentMethod
         )
 
         let outputURL: URL

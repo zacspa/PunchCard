@@ -24,21 +24,16 @@ struct InvoicePDFGenerator {
 
         var yPosition: CGFloat = pageHeight - margin
 
-        func startNewPage() {
-            if yPosition < pageHeight - margin {
-                context.endPDFPage()
-            }
-            context.beginPDFPage(nil)
-            yPosition = pageHeight - margin
+        // Pre-load logo image for watermark on every page
+        var logoImage: CGImage?
+        if let logoPath = invoice.logoPath,
+           let logoData = try? Data(contentsOf: URL(fileURLWithPath: logoPath)) as CFData,
+           let dataProvider = CGDataProvider(data: logoData) {
+            logoImage = CGImage(pngDataProviderSource: dataProvider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
         }
 
-        // --- Page 1 ---
-        startNewPage()
-
-        // Logo watermark (if provided) — drawn first so content renders on top
-        if let logoPath = invoice.logoPath,
-           let dataProvider = CGDataProvider(filename: logoPath),
-           let logoImage = CGImage(pngDataProviderSource: dataProvider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) {
+        func drawWatermark() {
+            guard let logoImage = logoImage else { return }
             let watermarkSize: CGFloat = 400
             let aspectRatio = CGFloat(logoImage.width) / CGFloat(logoImage.height)
             let watermarkWidth = aspectRatio >= 1 ? watermarkSize : watermarkSize * aspectRatio
@@ -51,6 +46,18 @@ struct InvoicePDFGenerator {
             context.draw(logoImage, in: watermarkRect)
             context.restoreGState()
         }
+
+        func startNewPage() {
+            if yPosition < pageHeight - margin {
+                context.endPDFPage()
+            }
+            context.beginPDFPage(nil)
+            drawWatermark()
+            yPosition = pageHeight - margin
+        }
+
+        // --- Page 1 ---
+        startNewPage()
 
         // Title and invoice number
         let titleFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 28, nil)
@@ -69,9 +76,21 @@ struct InvoicePDFGenerator {
         drawText(invoice.name, at: CGPoint(x: margin + 50, y: yPosition), font: valueFont, color: .black, context: context)
         yPosition -= lineHeight
 
+        if let email = invoice.email {
+            drawText("Email:", at: CGPoint(x: margin, y: yPosition), font: labelFont, color: grayColor, context: context)
+            drawText(email, at: CGPoint(x: margin + 50, y: yPosition), font: valueFont, color: .black, context: context)
+            yPosition -= lineHeight
+        }
+
         drawText("To:", at: CGPoint(x: margin, y: yPosition), font: labelFont, color: grayColor, context: context)
         drawText(invoice.client, at: CGPoint(x: margin + 50, y: yPosition), font: valueFont, color: .black, context: context)
         yPosition -= lineHeight
+
+        if let clientAddress = invoice.clientAddress {
+            drawText("Address:", at: CGPoint(x: margin, y: yPosition), font: labelFont, color: grayColor, context: context)
+            drawText(clientAddress, at: CGPoint(x: margin + 50, y: yPosition), font: valueFont, color: .black, context: context)
+            yPosition -= lineHeight
+        }
 
         let periodStr = "\(DateFormatting.formatDateOnly(invoice.fromDate)) to \(DateFormatting.formatDateOnly(invoice.toDate))"
         drawText("Period:", at: CGPoint(x: margin, y: yPosition), font: labelFont, color: grayColor, context: context)
@@ -81,7 +100,15 @@ struct InvoicePDFGenerator {
         let dateStr = DateFormatting.formatDateOnly(Date())
         drawText("Date:", at: CGPoint(x: margin, y: yPosition), font: labelFont, color: grayColor, context: context)
         drawText(dateStr, at: CGPoint(x: margin + 50, y: yPosition), font: valueFont, color: .black, context: context)
-        yPosition -= 35
+        yPosition -= lineHeight
+
+        if let terms = invoice.terms {
+            drawText("Terms:", at: CGPoint(x: margin, y: yPosition), font: labelFont, color: grayColor, context: context)
+            drawText(terms, at: CGPoint(x: margin + 50, y: yPosition), font: valueFont, color: .black, context: context)
+            yPosition -= lineHeight
+        }
+
+        yPosition -= 17
 
         // Table header drawing
         let colHeaderFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 10, nil)
@@ -155,7 +182,8 @@ struct InvoicePDFGenerator {
         // Footer totals
         inTableBody = false
         yPosition -= 10
-        checkPageBreakWithHeader(needed: 80)
+        let paymentSpace: CGFloat = invoice.paymentMethod != nil ? 80 : 0
+        checkPageBreakWithHeader(needed: 80 + paymentSpace)
 
         drawHLine(y: yPosition, from: margin, to: pageWidth - margin, color: .black, width: 1.0, context: context)
         yPosition -= 22
@@ -181,6 +209,17 @@ struct InvoicePDFGenerator {
         let grandTotalFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 14, nil)
         drawText("Total:", at: CGPoint(x: rightCol, y: yPosition), font: grandTotalFont, color: .black, context: context)
         drawTextRightAligned(String(format: "$%.2f", invoice.totalAmount), rightEdge: rightEdge, y: yPosition, font: grandTotalFont, color: .black, context: context)
+
+        if let paymentMethod = invoice.paymentMethod {
+            yPosition -= 40
+            checkPageBreakWithHeader(needed: 40)
+            drawHLine(y: yPosition, from: margin, to: pageWidth - margin, color: CGColor(gray: 0.6, alpha: 1.0), width: 0.5, context: context)
+            yPosition -= 20
+            let paymentHeaderFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 11, nil)
+            drawText("Payment Instructions", at: CGPoint(x: margin, y: yPosition), font: paymentHeaderFont, color: .black, context: context)
+            yPosition -= lineHeight
+            drawText(paymentMethod, at: CGPoint(x: margin, y: yPosition), font: labelFont, color: .black, context: context)
+        }
 
         context.endPDFPage()
         context.closePDF()
