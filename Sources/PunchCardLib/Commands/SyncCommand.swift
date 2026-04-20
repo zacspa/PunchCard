@@ -25,6 +25,9 @@ public struct Sync: ParsableCommand {
     @Flag(name: .long, help: "Only flush sessions queued after prior sync failures (ignores other filters).")
     var flushQueue: Bool = false
 
+    @Flag(name: .long, help: "Print the request envelopes instead of POSTing — use to verify config without hitting the network.")
+    var dryRun: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -65,6 +68,12 @@ public struct Sync: ParsableCommand {
                 includeDeleted: includeDeleted
             )
             : nil
+
+        if dryRun {
+            try printDryRun(sync: sync, sessions: sessions, scope: scope)
+            return
+        }
+
         let status = try sync.pushAll(
             sessions,
             action: replace ? "replace" : "upsert",
@@ -75,6 +84,41 @@ public struct Sync: ParsableCommand {
 
         // Opportunistic: flush the failure queue after a successful push.
         try? flushQueueQuietly()
+    }
+
+    private func printDryRun(sync: SyncService, sessions: [Session], scope: SyncService.ReplaceScope?) throws {
+        let config = try sync.loadConfig()
+        let url: URL
+        do {
+            url = try SyncService.validateHTTPSURL(config.webhookURL)
+        } catch {
+            throw ValidationError("Webhook is not configured or invalid: \(error)")
+        }
+        let envelopes = sync.buildEnvelopes(
+            sessions,
+            action: replace ? "replace" : "upsert",
+            replaceScope: scope
+        )
+        let secretMarker = (config.sharedSecret?.isEmpty == false)
+            ? "present (\(config.sharedSecret!.count) chars)" : "none"
+        let redactedHost = url.host ?? "?"
+        let redactedURL = "\(url.scheme ?? "?")://\(redactedHost)/…\(url.absoluteString.suffix(6))"
+        print("DRY RUN — no network call will be made.")
+        print("Method:  POST")
+        print("URL:     \(redactedURL)  (use `punchcard config show --reveal` for full)")
+        print("Headers:")
+        print("  Content-Type: application/json")
+        print("  X-PunchCard-Secret: \(secretMarker)")
+        print("Query:   secret=\(secretMarker == "none" ? "<omitted>" : "<same>")")
+        print("Batches: \(envelopes.count)   Sessions: \(sessions.count)")
+        print("")
+        for (i, env) in envelopes.enumerated() {
+            print("--- Batch \(i + 1)/\(envelopes.count) ---")
+            let data = try JSONSerialization.data(withJSONObject: env, options: [.prettyPrinted, .sortedKeys])
+            if let s = String(data: data, encoding: .utf8) {
+                print(s)
+            }
+        }
     }
 
     private func runFlushQueue() throws {

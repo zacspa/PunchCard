@@ -131,7 +131,7 @@ function doPost(e) {
 
   // Serialize concurrent stop/sync calls.
   const lock = LockService.getScriptLock();
-  lock.waitLock(30_000);
+  lock.waitLock(30000);
   try {
     const body = JSON.parse(e.postData.contents);
     const sheet = ensureSheet_();

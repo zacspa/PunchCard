@@ -58,7 +58,7 @@ public struct Edit: ParsableCommand {
             summary: summary,
             endTime: parsedEndTime
         )
-        SyncDispatcher.pushBestEffort(session, noSync: noSync)
+        SyncDispatcher.announce(SyncDispatcher.pushBestEffort(session, noSync: noSync))
 
         print("Session updated:")
         print("  ID:       \(session.id.uuidString)")

@@ -21,7 +21,7 @@ public struct Undelete: ParsableCommand {
 
         let store = SessionStore()
         let session = try store.undeleteSession(id: uuid)
-        SyncDispatcher.pushBestEffort(session, noSync: noSync)
+        SyncDispatcher.announce(SyncDispatcher.pushBestEffort(session, noSync: noSync))
 
         print("Session restored:")
         print("  ID:       \(session.id.uuidString)")

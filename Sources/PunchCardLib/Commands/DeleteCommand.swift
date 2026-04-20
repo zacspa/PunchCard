@@ -21,7 +21,7 @@ public struct Delete: ParsableCommand {
 
         let store = SessionStore()
         let session = try store.deleteSession(id: uuid)
-        SyncDispatcher.pushBestEffort(session, noSync: noSync)
+        SyncDispatcher.announce(SyncDispatcher.pushBestEffort(session, noSync: noSync))
 
         print("Session deleted:")
         print("  ID:       \(session.id.uuidString)")

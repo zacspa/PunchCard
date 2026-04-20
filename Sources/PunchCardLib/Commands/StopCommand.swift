@@ -67,6 +67,6 @@ public struct Stop: ParsableCommand {
             FileHandle.standardError.write(Data("Warning: end time was earlier than start time (likely clock skew). Duration clamped to zero — use `punchcard edit --end-time <ISO8601>` to fix it.\n".utf8))
         }
 
-        SyncDispatcher.pushBestEffort(session, noSync: noSync)
+        SyncDispatcher.announce(SyncDispatcher.pushBestEffort(session, noSync: noSync))
     }
 }

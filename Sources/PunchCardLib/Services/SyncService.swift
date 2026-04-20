@@ -154,6 +154,43 @@ public struct SyncService {
         return try post(url: url, secret: config.sharedSecret, body: envelope)
     }
 
+    /// Build the envelopes that `pushAll` would POST, without sending them.
+    /// Each element is one HTTP body (batched per `batchSize`).
+    public func buildEnvelopes(
+        _ sessions: [Session],
+        action: String = "upsert",
+        replaceScope: ReplaceScope? = nil
+    ) -> [[String: Any]] {
+        if sessions.isEmpty {
+            if action == "replace", let scope = replaceScope {
+                var envelope: [String: Any] = [
+                    "action": "replace",
+                    "sessions": [[String: Any]](),
+                ]
+                envelope["scope"] = Self.scopeDict(scope)
+                return [envelope]
+            }
+            return []
+        }
+        let chunks = stride(from: 0, to: sessions.count, by: Self.batchSize).map {
+            Array(sessions[$0..<min($0 + Self.batchSize, sessions.count)])
+        }
+        var envelopes: [[String: Any]] = []
+        for (index, chunk) in chunks.enumerated() {
+            var envelope: [String: Any] = [
+                "action": action,
+                "sessions": chunk.map { Self.payloadDict(Self.makePayload($0)) },
+            ]
+            if action == "replace", index == 0, let scope = replaceScope {
+                envelope["scope"] = Self.scopeDict(scope)
+            } else if action == "replace" {
+                envelope["action"] = "upsert"
+            }
+            envelopes.append(envelope)
+        }
+        return envelopes
+    }
+
     /// Push multiple sessions. Batches to `batchSize` per request. Returns the
     /// last HTTP status on success; throws on first failure.
     @discardableResult
