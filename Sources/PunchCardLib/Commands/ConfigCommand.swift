@@ -5,7 +5,7 @@ public struct Config: ParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "config",
         abstract: "Manage PunchCard configuration (e.g. Google Sheet sync).",
-        subcommands: [Show.self, SetWebhook.self, SetSecret.self, Disable.self, Enable.self],
+        subcommands: [Show.self, SetWebhook.self, SetSecret.self, Disable.self, Enable.self, QR.self],
         defaultSubcommand: Show.self
     )
 
@@ -168,6 +168,83 @@ public struct Config: ParsableCommand {
             config.enabled = true
             try sync.saveConfig(config)
             print("Sheet sync enabled.")
+        }
+    }
+
+    public struct QR: ParsableCommand {
+        public static let configuration = CommandConfiguration(
+            commandName: "qr",
+            abstract: "Print a QR code to pair a project with the mobile app.",
+            discussion: """
+            The mobile app keeps per-project webhook URLs and secrets. This
+            command emits a QR code for one project at a time, using the CLI's
+            current global webhook + secret as that project's sync target.
+
+              punchcard config qr Acme
+
+            Scan from the PunchCard mobile app (Settings → Scan project QR).
+            Because the QR contains the secret, do not screenshot or share it
+            publicly.
+            """
+        )
+
+        @Argument(help: "Project to pair. Must be a registered project on the CLI.")
+        var project: String?
+
+        @Flag(name: .long, help: "Omit the shared secret from the QR. Enter it on the phone by hand.")
+        var noSecret: Bool = false
+
+        public init() {}
+
+        public func run() throws {
+            let sync = SyncService()
+            let config = (try? sync.loadConfig()) ?? SyncConfig()
+            guard let webhook = config.webhookURL, !webhook.isEmpty else {
+                throw ValidationError("No webhook URL set. Run `punchcard config set-webhook <url>` first.")
+            }
+
+            let name = try resolveProjectName()
+            let secret = noSecret ? nil : config.sharedSecret
+
+            guard let uri = ConfigURI.encodeProject(
+                name: name,
+                webhookURL: webhook,
+                sharedSecret: secret,
+                enabled: true
+            ) else {
+                throw ValidationError("Could not encode project URI.")
+            }
+            let qr = try TerminalQR.render(uri)
+            print(qr)
+            print()
+            print("Project: \(name)")
+            print("Scan with PunchCard mobile → Settings → Scan project QR.")
+            if secret != nil {
+                print("Contains the shared secret — don't share or screenshot this QR.")
+            } else if config.sharedSecret != nil {
+                print("Secret omitted (--no-secret). Enter it on the phone by hand.")
+            }
+        }
+
+        private func resolveProjectName() throws -> String {
+            let registered = (try? ProjectStore().list()) ?? []
+            if let arg = project?.trimmingCharacters(in: .whitespaces), !arg.isEmpty {
+                if !registered.contains(where: { $0.caseInsensitiveCompare(arg) == .orderedSame }) {
+                    let list = registered.isEmpty ? "(none registered)" : registered.joined(separator: ", ")
+                    throw ValidationError("Project '\(arg)' is not registered. Known: \(list). Add it with `punchcard project add \(arg)`.")
+                }
+                // Match the registered capitalization so the phone/sheet agree.
+                return registered.first { $0.caseInsensitiveCompare(arg) == .orderedSame } ?? arg
+            }
+            if registered.isEmpty {
+                throw ValidationError("No projects registered. Run `punchcard project add <name>` first.")
+            }
+            throw ValidationError("""
+                Specify a project. Registered projects:
+                  \(registered.joined(separator: "\n  "))
+
+                Example: punchcard config qr \(registered.first ?? "<name>")
+                """)
         }
     }
 }
