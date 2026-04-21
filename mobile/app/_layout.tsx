@@ -103,6 +103,14 @@ export default function RootLayout() {
                 name="log-note"
                 options={{ title: "Log Note", presentation: "modal" }}
               />
+              <Stack.Screen
+                name="expense-capture"
+                options={{ headerShown: false, presentation: "fullScreenModal" }}
+              />
+              <Stack.Screen
+                name="expense-new"
+                options={{ title: "New expense", presentation: "modal" }}
+              />
               <Stack.Screen name="settings/index" options={{ title: "Settings" }} />
               <Stack.Screen name="settings/projects" options={{ title: "Projects" }} />
               <Stack.Screen name="settings/project/[name]" options={{ title: "Project" }} />

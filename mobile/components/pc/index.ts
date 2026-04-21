@@ -2,6 +2,7 @@ export { PCButton } from "./PCButton";
 export { PCCard } from "./PCCard";
 export { PCChevron, PCDenseRow, PCSectionHead } from "./PCDenseRow";
 export { PCChip } from "./PCChip";
+export { PCExpenseRow } from "./PCExpenseRow";
 export { PCFieldButton } from "./PCFieldButton";
 export { PCHairline } from "./PCHairline";
 export { PCMark } from "./PCMark";
