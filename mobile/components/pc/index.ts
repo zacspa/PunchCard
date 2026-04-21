@@ -9,5 +9,6 @@ export { PCProjectDot, projectTone } from "./PCProjectDot";
 export { PCPunchStrip } from "./PCPunchStrip";
 export { PCSessionRow } from "./PCSessionRow";
 export { PCStampCard } from "./PCStampCard";
+export { PCTabBar } from "./PCTabBar";
 export { PCText } from "./PCText";
 export { PCTimer } from "./PCTimer";

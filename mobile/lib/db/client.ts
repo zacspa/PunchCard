@@ -33,6 +33,34 @@ sqlite.execSync(`
     enqueued_at TEXT NOT NULL,
     last_error TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS expenses (
+    id TEXT PRIMARY KEY,
+    project TEXT NOT NULL,
+    merchant TEXT NOT NULL DEFAULT '',
+    amount_cents INTEGER NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    captured_at TEXT NOT NULL,
+    category TEXT,
+    billable INTEGER NOT NULL DEFAULT 1,
+    note TEXT,
+    receipt_image_path TEXT,
+    ocr TEXT,
+    sync_state TEXT NOT NULL DEFAULT 'local',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS expenses_captured_idx
+    ON expenses (captured_at DESC) WHERE deleted = 0;
+  CREATE INDEX IF NOT EXISTS expenses_project_idx
+    ON expenses (project) WHERE deleted = 0;
+
+  CREATE TABLE IF NOT EXISTS expense_sync_queue (
+    expense_id TEXT PRIMARY KEY,
+    enqueued_at TEXT NOT NULL,
+    last_error TEXT
+  );
 `);
 
 // Backfill columns if upgrading from a schema that predated per-project sync.

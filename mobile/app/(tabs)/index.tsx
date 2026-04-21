@@ -68,7 +68,7 @@ export default function Home() {
           {
             paddingLeft: 20 + insets.left,
             paddingRight: 20 + insets.right,
-            paddingBottom: 40 + insets.bottom,
+            paddingBottom: 24,
           },
         ]}
         showsVerticalScrollIndicator={false}

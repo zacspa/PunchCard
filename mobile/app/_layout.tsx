@@ -90,7 +90,7 @@ export default function RootLayout() {
                 contentStyle: { backgroundColor: theme.colors.background },
               }}
             >
-              <Stack.Screen name="index" options={{ title: "PunchCard", headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
               <Stack.Screen
                 name="punch-in"
                 options={{ title: "Punch In", presentation: "modal" }}
