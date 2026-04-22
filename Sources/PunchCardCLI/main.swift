@@ -19,6 +19,7 @@ struct PunchCardCLI: ParsableCommand {
             Project.self,
             Sync.self,
             Config.self,
+            ExpenseCmd.self,
         ]
     )
 }

@@ -260,7 +260,22 @@ public struct SyncService {
         return d
     }
 
-    private func post(url: URL, secret: String?, body: [String: Any]) throws -> Int {
+    /// Post a single expense payload as `upsert-expenses`. Uses a longer
+    /// overall timeout than session syncs because the payload may include a
+    /// base64-encoded receipt image.
+    @discardableResult
+    public func postExpense(_ expense: [String: Any]) throws -> Int {
+        let config = try loadConfig()
+        guard config.isConfigured else { throw SyncError.notConfigured }
+        let url = try Self.validateHTTPSURL(config.webhookURL)
+        let envelope: [String: Any] = [
+            "action": "upsert-expenses",
+            "expenses": [expense],
+        ]
+        return try post(url: url, secret: config.sharedSecret, body: envelope, overallTimeout: 20)
+    }
+
+    private func post(url: URL, secret: String?, body: [String: Any], overallTimeout: TimeInterval = Self.overallTimeout) throws -> Int {
         let jsonData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         // Apps Script web apps can't reliably read custom request headers, so
         // we also carry the secret as a query parameter. Neither channel is
@@ -300,10 +315,10 @@ public struct SyncService {
             }
         }
         task.resume()
-        let waitResult = semaphore.wait(timeout: .now() + Self.overallTimeout)
+        let waitResult = semaphore.wait(timeout: .now() + overallTimeout)
         if waitResult == .timedOut {
             task.cancel()
-            throw SyncError.network("Timed out after \(Int(Self.overallTimeout))s")
+            throw SyncError.network("Timed out after \(Int(overallTimeout))s")
         }
 
         let snapshot = result.snapshot()
