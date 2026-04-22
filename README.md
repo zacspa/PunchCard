@@ -1,17 +1,18 @@
 # PunchCard
 
-A Swift CLI tool for tracking contract work hours and generating PDF invoices. Designed to integrate with [Claude Code](https://claude.ai/claude-code) via slash commands (`/punch-in`, `/punch-out`, `/invoice`).
+A Swift CLI tool for tracking contract work hours, capturing billable expenses, and generating PDF invoices. Designed to integrate with [Claude Code](https://claude.ai/claude-code) via slash commands (`/punch-in`, `/punch-out`, `/invoice`, `/expense`).
 
 ## Features
 
 - **Time tracking** -- start/stop sessions, log notes mid-session
+- **Expense tracking** -- `punchcard expense add` posts a billable expense (optionally with a receipt image) directly to your Google Sheet; the mobile app captures receipts from your phone
 - **Project management** -- register project names, validate on start
-- **PDF invoices** -- professional layout with line items, rates, totals, and invoice numbering
+- **PDF invoices** -- hours, expenses, or both, with a dedicated `--expenses-only` mode
 - **CSV export** -- portable backup for accounting and spreadsheets
 - **Edit/delete/undelete** -- fix mistakes with soft-delete (nothing is ever truly lost)
-- **File locking** -- safe against concurrent CLI invocations
-- **Auto-backup** -- `sessions.json.bak` created on every write
-- **Claude Code skills** -- AI-driven time tracking via `/punch-in`, `/punch-out`, `/invoice`
+- **Google Sheet sync** -- push sessions and expenses to a Sheet via Apps Script, pull billable expenses back for invoices
+- **Mobile companion** -- pair a project via terminal QR; capture receipts and log sessions from iOS/Android
+- **Claude Code skills** -- AI-driven workflows via `/punch-in`, `/punch-out`, `/invoice`, `/expense`
 
 ## Installation
 
@@ -64,6 +65,15 @@ punchcard list --from 2026-03-01 --to 2026-03-31 --project "Acme Corp"
 # Generate an invoice
 punchcard invoice --from 2026-03-01 --to 2026-03-31 --rate 150 --name "Your Name" --client "Acme Corp"
 
+# Include billable expenses pulled from the Google Sheet
+punchcard invoice --from 2026-03-01 --to 2026-03-31 --rate 150 --name "Your Name" --client "Acme Corp" --with-expenses
+
+# Expenses-only invoice (no hours; --rate not required)
+punchcard invoice --from 2026-03-01 --to 2026-03-31 --name "Your Name" --client "Acme Corp" --expenses-only
+
+# Log a billable expense (posts to the sheet immediately)
+punchcard expense add --project "Acme Corp" --merchant "Café Grumpy" --amount 14.20 --category meals --image ~/Pictures/receipt.jpg
+
 # Export to CSV
 punchcard export --output ~/invoices/march-2026.csv
 ```
@@ -83,6 +93,8 @@ punchcard export --output ~/invoices/march-2026.csv
 | `config set-webhook URL` | Point sync at a Google Apps Script / HTTP webhook |
 | `config set-secret SECRET` | Optional shared secret sent as `X-PunchCard-Secret` |
 | `config enable` / `config disable` | Toggle sync without deleting the URL |
+| `config qr PROJECT` | Print a QR code to pair a project with the mobile app |
+| `expense add` | Log a billable expense (merchant, amount, date, category, optional receipt image); posts to the sheet |
 | `log "NOTE"` | Add a note to the active session |
 | `status` | Show active session info |
 | `list` | List completed sessions |
@@ -91,7 +103,7 @@ punchcard export --output ~/invoices/march-2026.csv
 | `delete --id UUID` | Soft-delete a session |
 | `undelete --id UUID` | Restore a soft-deleted session |
 | `export` | Export sessions to CSV |
-| `invoice` | Generate a PDF invoice |
+| `invoice` | Generate a PDF invoice (add `--with-expenses` to pull billable expenses from the sheet, or `--expenses-only` for an expenses-only invoice with no hours) |
 | `project add/list/remove` | Manage registered project names |
 
 ## Claude Code integration
@@ -101,6 +113,7 @@ With the skills installed, you can use natural language commands in Claude Code:
 - **`/punch-in Acme Corp`** -- starts tracking, checks for active sessions
 - **`/punch-out`** -- Claude summarizes the session from conversation context, captures git commits, and stops tracking
 - **`/invoice last two weeks at $150/hr for Acme Corp`** -- Claude converts natural language dates, previews sessions, and generates a PDF
+- **`/expense`** (drop a receipt image into the prompt) -- Claude reads the receipt with vision, extracts merchant/amount/date/category, confirms with you, then runs `punchcard expense add` with the receipt attached
 
 ## Google Sheet sync (optional)
 
@@ -240,6 +253,34 @@ function json_(obj, status) {
 
 > **Note on header auth.** Apps Script web apps don't reliably expose custom request headers, so PunchCard also sends the secret as a URL `?secret=...` query parameter as a fallback — the Apps Script checks header-then-query. Always keep the webhook URL private regardless.
 
+### 1b. (Optional) Expense sync — add the expenses handler
+
+To also receive expenses from the mobile app or `punchcard expense add`, paste `apps-script/Expenses.gs` from this repo into the same script project as a second file, and route the new action in your `doPost`:
+
+```javascript
+// inside doPost, after the secret check, before the session logic:
+const body = JSON.parse(e.postData.contents);
+if (body.action === 'upsert-expenses') {
+  return PunchCardExpenses.handle(body);
+}
+```
+
+To let `punchcard invoice --with-expenses` / `--expenses-only` pull billable expenses back from the sheet, also add a matching `doGet`:
+
+```javascript
+function doGet(e) {
+  // same secret guard as doPost
+  if (e.parameter.resource === 'expenses') {
+    return PunchCardExpenses.list(e.parameter);
+  }
+  return ContentService
+    .createTextOutput(JSON.stringify({ ok: false, error: 'Unknown resource' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+```
+
+On first use, the handler creates an `Expenses` sheet tab and a `PunchCard Receipts` Drive folder. The script project will prompt for Drive permissions the first time it uploads a receipt — grant both read + write and redeploy the Web App (Deploy → Manage deployments → edit → New version) so the new scopes take effect. Full details in `apps-script/README.md`.
+
 ### 2. Deploy as a web app
 
 Click **Deploy → New deployment → Web app**. Set "Execute as: Me" and "Who has access: Anyone with the link". Copy the deployment URL. The URL is a bearer capability — treat it like a secret.
@@ -268,6 +309,16 @@ punchcard sync --flush-queue                         # retry sessions that faile
 
 The webhook URL and shared secret live in `~/.punchcard/sync.json` (mode 0600). `punchcard config show` redacts the URL by default — pass `--reveal` to print it in full.
 
+## Mobile companion (optional)
+
+An Expo/React Native app in `mobile/` logs sessions and captures receipts from your phone and syncs to the same Google Sheet. Each project keeps its own webhook URL and shared secret on-device; pairing is done with a QR code from the CLI:
+
+```bash
+punchcard config qr "Acme Corp"   # prints a QR in your terminal
+```
+
+On the phone: PunchCard mobile → Settings → Scan project QR. The QR embeds the webhook URL and secret for that project — don't screenshot or share it. See `mobile/DESIGN_BRIEF.md` for the app architecture.
+
 ## Data storage
 
 All data is stored in `~/.punchcard/`:
@@ -287,7 +338,7 @@ All data is stored in `~/.punchcard/`:
 swift test
 ```
 
-91 tests across 14 suites covering models, stores, PDF generation (with text extraction), CSV export, edit/delete/undelete, file locking, backup, and integration workflows.
+112 tests across 17 suites covering models, stores, PDF generation (with text extraction), CSV export, edit/delete/undelete, file locking, backup, and integration workflows.
 
 ## Requirements
 
