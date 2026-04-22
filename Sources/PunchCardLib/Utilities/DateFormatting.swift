@@ -52,6 +52,17 @@ public enum DateFormatting {
         iso8601.string(from: date)
     }
 
+    private nonisolated(unsafe) static let iso8601WithFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    /// Parse an ISO 8601 date string, accepting fractional seconds or not.
+    public static func parseISO8601(_ string: String) -> Date? {
+        iso8601WithFractional.date(from: string) ?? iso8601.date(from: string)
+    }
+
     public static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

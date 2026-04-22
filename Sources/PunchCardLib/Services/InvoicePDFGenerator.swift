@@ -201,7 +201,68 @@ struct InvoicePDFGenerator {
 
         drawText("Rate:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
         drawTextRightAligned(String(format: "$%.2f/hr", invoice.hourlyRate), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
-        yPosition -= 18
+        yPosition -= 20
+
+        if !invoice.expenses.isEmpty {
+            drawText("Services:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
+            drawTextRightAligned(String(format: "$%.2f", invoice.servicesAmount), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
+            yPosition -= 30
+
+            // Expenses table — reuses the date/amount column layout as services.
+            checkPageBreakWithHeader(needed: 80)
+
+            let sectionHeaderFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 12, nil)
+            drawText("Billable Expenses", at: CGPoint(x: margin, y: yPosition), font: sectionHeaderFont, color: .black, context: context)
+            yPosition -= 18
+            drawHLine(y: yPosition, from: margin, to: pageWidth - margin, color: .black, width: 1.0, context: context)
+            yPosition -= 16
+            let amountColWidth: CGFloat = 90
+            let expDescColX = margin + dateColWidth
+            let expDescMaxWidth = contentWidth - dateColWidth - amountColWidth
+            let amountColRight = pageWidth - margin
+            drawText("Date", at: CGPoint(x: margin, y: yPosition), font: colHeaderFont, color: .black, context: context)
+            drawText("Description", at: CGPoint(x: expDescColX, y: yPosition), font: colHeaderFont, color: .black, context: context)
+            drawTextRightAligned("Amount", rightEdge: amountColRight, y: yPosition, font: colHeaderFont, color: .black, context: context)
+            yPosition -= 16
+            drawHLine(y: yPosition, from: margin, to: pageWidth - margin, color: CGColor(gray: 0.6, alpha: 1.0), width: 0.5, context: context)
+            yPosition -= 5
+
+            for (idx, exp) in invoice.expenses.enumerated() {
+                let dateText = DateFormatting.formatDateOnly(exp.date)
+                let descLines = wrapText(exp.description, maxWidth: expDescMaxWidth, font: rowFont)
+                let descTextHeight = CGFloat(descLines.count) * lineHeight
+                let rowHeight = max(lineHeight, descTextHeight) + rowPadding * 2
+
+                if yPosition < margin + rowHeight {
+                    startNewPage()
+                }
+
+                if idx % 2 == 0 {
+                    let shadingRect = CGRect(x: margin - 5, y: yPosition - rowHeight + rowPadding, width: contentWidth + 10, height: rowHeight)
+                    context.setFillColor(CGColor(gray: 0.95, alpha: 0.6))
+                    context.fill(shadingRect)
+                }
+
+                let midY = yPosition - rowHeight / 2 + 3
+                drawText(dateText, at: CGPoint(x: margin, y: midY), font: rowFont, color: .black, context: context)
+                let descBlockHeight = CGFloat(descLines.count) * lineHeight
+                var descY = midY + (descBlockHeight - lineHeight) / 2
+                for line in descLines {
+                    drawText(line, at: CGPoint(x: expDescColX, y: descY), font: rowFont, color: .black, context: context)
+                    descY -= lineHeight
+                }
+                let amountText = String(format: "$%.2f", exp.amount)
+                drawTextRightAligned(amountText, rightEdge: amountColRight, y: midY, font: monoFont, color: .black, context: context)
+                yPosition -= rowHeight
+            }
+
+            yPosition -= 6
+            drawHLine(y: yPosition, from: rightCol, to: rightEdge, color: CGColor(gray: 0.6, alpha: 1.0), width: 0.5, context: context)
+            yPosition -= 18
+            drawText("Expenses:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
+            drawTextRightAligned(String(format: "$%.2f", invoice.expensesAmount), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
+            yPosition -= 18
+        }
 
         drawHLine(y: yPosition, from: rightCol, to: rightEdge, color: .black, width: 0.5, context: context)
         yPosition -= 20

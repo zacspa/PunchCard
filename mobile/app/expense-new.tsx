@@ -23,6 +23,7 @@ import { enqueueExpense } from "@/lib/db/expense-queue";
 import { useExpenseStore } from "@/lib/state/expense-store";
 import { useSessionStore } from "@/lib/state/session-store";
 import { persistReceiptImage } from "@/lib/storage/receipts";
+import { pushExpenseBestEffort } from "@/lib/sync/expense-dispatcher";
 import type { Expense, ExpenseCategory } from "@/lib/models/expense";
 
 const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
@@ -122,6 +123,7 @@ export default function ExpenseNewScreen() {
     try {
       await insertExpense(expense);
       await enqueueExpense(expense.id);
+      pushExpenseBestEffort(expense);
       await refresh();
     } catch (e) {
       setSubmitting(false);

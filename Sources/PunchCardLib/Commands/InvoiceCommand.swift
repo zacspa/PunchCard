@@ -42,6 +42,9 @@ public struct Invoice: ParsableCommand {
     @Option(name: .long, help: "Path to a logo image to display at the top of the invoice.")
     var logo: String?
 
+    @Flag(name: .long, help: "Pull billable expenses from the Google Sheet for this period.")
+    var withExpenses: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -86,6 +89,27 @@ public struct Invoice: ParsableCommand {
             )
         }
 
+        var expenseItems: [InvoiceExpenseItem] = []
+        if withExpenses {
+            let fetch = ExpenseFetchService()
+            do {
+                let remote = try fetch.fetchBillable(project: project, from: fromDate, to: toDate)
+                expenseItems = remote.compactMap { r -> InvoiceExpenseItem? in
+                    guard let date = DateFormatting.parseISO8601(r.capturedAt)
+                          ?? DateFormatting.parseDate(r.capturedAt) else { return nil }
+                    return InvoiceExpenseItem(
+                        date: date,
+                        merchant: r.merchant,
+                        note: r.note,
+                        amountCents: r.amountCents,
+                        currency: r.currency
+                    )
+                }.sorted(by: { $0.date < $1.date })
+            } catch {
+                throw ValidationError("Couldn't fetch expenses from the sheet: \(error). Check `punchcard config show` and the Apps Script doGet handler, or drop --with-expenses.")
+            }
+        }
+
         let invoiceNumber = try InvoiceCounter.next()
         let invoiceData = InvoiceData(
             invoiceNumber: invoiceNumber,
@@ -95,6 +119,7 @@ public struct Invoice: ParsableCommand {
             toDate: toDate,
             hourlyRate: rate,
             lineItems: lineItems,
+            expenses: expenseItems,
             logoPath: logo,
             email: email,
             clientAddress: clientAddress,
@@ -119,6 +144,10 @@ public struct Invoice: ParsableCommand {
         print("  Sessions: \(sessions.count)")
         print("  Total hours: \(String(format: "%.2f", invoiceData.totalHours))")
         print("  Rate: $\(String(format: "%.2f", rate))/hr")
+        if !expenseItems.isEmpty {
+            print("  Services: $\(String(format: "%.2f", invoiceData.servicesAmount))")
+            print("  Expenses: \(expenseItems.count) item\(expenseItems.count == 1 ? "" : "s") — $\(String(format: "%.2f", invoiceData.expensesAmount))")
+        }
         print("  Total: $\(String(format: "%.2f", invoiceData.totalAmount))")
     }
 }

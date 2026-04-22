@@ -1,8 +1,8 @@
-import type { SyncEnvelope } from "./payload";
 import type { SyncConfig } from "../models/session";
 
 export const REQUEST_TIMEOUT_MS = 5_000;
 export const OVERALL_TIMEOUT_MS = 7_000;
+export const EXPENSE_TIMEOUT_MS = 20_000;
 
 export type SyncResult =
   | { ok: true; status: number }
@@ -16,7 +16,8 @@ const buildURL = (webhookURL: string, secret: string | null): string => {
 
 export const postEnvelope = async (
   config: SyncConfig,
-  envelope: SyncEnvelope,
+  envelope: Record<string, unknown>,
+  timeoutMs: number = OVERALL_TIMEOUT_MS,
 ): Promise<SyncResult> => {
   if (!config.enabled) {
     return { ok: false, kind: "disabled", message: "Sync is disabled in settings." };
@@ -27,8 +28,7 @@ export const postEnvelope = async (
 
   const url = buildURL(config.webhookURL, config.sharedSecret);
   const controller = new AbortController();
-  const requestTimer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const overallTimer = setTimeout(() => controller.abort(), OVERALL_TIMEOUT_MS);
+  const overallTimer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -78,12 +78,11 @@ export const postEnvelope = async (
     };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") {
-      return { ok: false, kind: "timeout", message: `Timed out after ${OVERALL_TIMEOUT_MS}ms` };
+      return { ok: false, kind: "timeout", message: `Timed out after ${timeoutMs}ms` };
     }
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, kind: "network", message: msg };
   } finally {
-    clearTimeout(requestTimer);
     clearTimeout(overallTimer);
   }
 };

@@ -8,6 +8,7 @@ public struct InvoiceData: Sendable {
     public let toDate: Date
     public let hourlyRate: Double
     public let lineItems: [InvoiceLineItem]
+    public let expenses: [InvoiceExpenseItem]
     public let logoPath: String?
     public let email: String?
     public let clientAddress: String?
@@ -18,11 +19,19 @@ public struct InvoiceData: Sendable {
         lineItems.reduce(0) { $0 + $1.hours }
     }
 
-    public var totalAmount: Double {
+    public var servicesAmount: Double {
         totalHours * hourlyRate
     }
 
-    public init(invoiceNumber: Int, name: String, client: String, fromDate: Date, toDate: Date, hourlyRate: Double, lineItems: [InvoiceLineItem], logoPath: String? = nil, email: String? = nil, clientAddress: String? = nil, terms: String? = nil, paymentMethod: String? = nil) {
+    public var expensesAmount: Double {
+        expenses.reduce(0) { $0 + $1.amount }
+    }
+
+    public var totalAmount: Double {
+        servicesAmount + expensesAmount
+    }
+
+    public init(invoiceNumber: Int, name: String, client: String, fromDate: Date, toDate: Date, hourlyRate: Double, lineItems: [InvoiceLineItem], expenses: [InvoiceExpenseItem] = [], logoPath: String? = nil, email: String? = nil, clientAddress: String? = nil, terms: String? = nil, paymentMethod: String? = nil) {
         self.invoiceNumber = invoiceNumber
         self.name = name
         self.client = client
@@ -30,11 +39,37 @@ public struct InvoiceData: Sendable {
         self.toDate = toDate
         self.hourlyRate = hourlyRate
         self.lineItems = lineItems
+        self.expenses = expenses
         self.logoPath = logoPath
         self.email = email
         self.clientAddress = clientAddress
         self.terms = terms
         self.paymentMethod = paymentMethod
+    }
+}
+
+public struct InvoiceExpenseItem: Sendable {
+    public let date: Date
+    public let merchant: String
+    public let note: String?
+    public let amountCents: Int
+    public let currency: String
+
+    public var amount: Double {
+        Double(amountCents) / 100.0
+    }
+
+    public var description: String {
+        guard let note = note, !note.isEmpty else { return merchant }
+        return "\(merchant) — \(note)"
+    }
+
+    public init(date: Date, merchant: String, note: String?, amountCents: Int, currency: String) {
+        self.date = date
+        self.merchant = merchant
+        self.note = note
+        self.amountCents = amountCents
+        self.currency = currency
     }
 }
 

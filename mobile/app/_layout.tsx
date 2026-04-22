@@ -29,8 +29,10 @@ import { en, registerTranslation } from "react-native-paper-dates";
 import "@/lib/db/client";
 import "@/lib/sync/worker";
 import { drainQueue } from "@/lib/sync/dispatcher";
+import { drainExpenseQueue } from "@/lib/sync/expense-dispatcher";
 import { registerSyncTask } from "@/lib/sync/worker";
 import { migrateGlobalSyncToProjects } from "@/lib/config/secure";
+import { useExpenseStore } from "@/lib/state/expense-store";
 import { useSessionStore } from "@/lib/state/session-store";
 import { darkPaperTheme, lightPaperTheme } from "@/lib/theme";
 
@@ -41,6 +43,7 @@ export default function RootLayout() {
   const scheme = useColorScheme();
   const theme = scheme === "dark" ? darkPaperTheme : lightPaperTheme;
   const refresh = useSessionStore((s) => s.refresh);
+  const refreshExpenses = useExpenseStore((s) => s.refresh);
 
   const [fontsLoaded] = useFonts({
     Fraunces_500Medium,
@@ -60,16 +63,24 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    migrateGlobalSyncToProjects().then(() => refresh()).catch(() => refresh());
+    migrateGlobalSyncToProjects().then(() => {
+      refresh();
+      refreshExpenses();
+    }).catch(() => {
+      refresh();
+      refreshExpenses();
+    });
     registerSyncTask();
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") {
         refresh();
+        refreshExpenses();
         drainQueue().then(() => refresh()).catch(() => {});
+        drainExpenseQueue().then(() => refreshExpenses()).catch(() => {});
       }
     });
     return () => sub.remove();
-  }, [refresh]);
+  }, [refresh, refreshExpenses]);
 
   // Render immediately; unloaded fonts fall back to the system font. This
   // avoids the app being stuck on the splash while fonts download in Expo Go.
