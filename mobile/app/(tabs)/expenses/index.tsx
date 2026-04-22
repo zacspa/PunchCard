@@ -120,6 +120,9 @@ export default function ExpensesList() {
                       key={e.id}
                       expense={e}
                       showDivider={i < arr.length - 1}
+                      onPress={() =>
+                        router.push({ pathname: "/expense-new", params: { id: e.id } })
+                      }
                     />
                   ))}
                 </View>

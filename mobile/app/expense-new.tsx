@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Image, Pressable, ScrollView, StyleSheet, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Snackbar, Switch, TextInput } from "react-native-paper";
 import { DatePickerModal, TimePickerModal } from "react-native-paper-dates";
 import { format } from "date-fns";
@@ -18,7 +18,7 @@ import {
 } from "@/components/pc";
 import { useTokens } from "@/lib/theme";
 import { listProjects } from "@/lib/db/projects";
-import { insertExpense } from "@/lib/db/expenses";
+import { getExpenseById, insertExpense, updateExpense } from "@/lib/db/expenses";
 import { enqueueExpense } from "@/lib/db/expense-queue";
 import { useExpenseStore } from "@/lib/state/expense-store";
 import { useSessionStore } from "@/lib/state/session-store";
@@ -51,11 +51,16 @@ const formatAmountInput = (cents: number | null): string => {
 export default function ExpenseNewScreen() {
   const router = useRouter();
   const t = useTokens();
-  const params = useLocalSearchParams<{ sourceImageURI?: string }>();
+  const params = useLocalSearchParams<{ sourceImageURI?: string; id?: string }>();
   const refresh = useExpenseStore((s) => s.refresh);
   const activeSession = useSessionStore((s) => s.active);
 
-  const expenseIdRef = useRef<string>(Crypto.randomUUID().toUpperCase());
+  const editingId = params.id || null;
+  const isEdit = editingId !== null;
+
+  const expenseIdRef = useRef<string>(editingId ?? Crypto.randomUUID().toUpperCase());
+  const originalRef = useRef<Expense | null>(null);
+  const [loaded, setLoaded] = useState(!isEdit);
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [amountText, setAmountText] = useState("");
   const [merchant, setMerchant] = useState("");
@@ -74,29 +79,54 @@ export default function ExpenseNewScreen() {
   // Persist the captured image once on mount if we got one from the camera.
   useEffect(() => {
     const source = params.sourceImageURI;
-    if (!source || imagePath) return;
+    if (!source || imagePath || isEdit) return;
     try {
       const saved = persistReceiptImage(source, expenseIdRef.current);
       setImagePath(saved);
     } catch {
       setError("Couldn't save the receipt photo.");
     }
-  }, [params.sourceImageURI, imagePath]);
+  }, [params.sourceImageURI, imagePath, isEdit]);
+
+  // Hydrate from existing row when editing.
+  useEffect(() => {
+    if (!editingId) return;
+    let cancelled = false;
+    getExpenseById(editingId).then((row) => {
+      if (cancelled || !row) return;
+      originalRef.current = row;
+      expenseIdRef.current = row.id;
+      setImagePath(row.receiptImagePath);
+      setAmountText(formatAmountInput(row.amountCents));
+      setMerchant(row.merchant);
+      setCapturedAt(new Date(row.capturedAt));
+      setCategory(row.category);
+      setBillable(row.billable);
+      setNote(row.note ?? "");
+      setProject(row.project);
+      setLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [editingId]);
 
   useEffect(() => {
     listProjects().then((ps) => {
       setProjects(ps);
+      if (isEdit) return; // preserved from hydration
       const initial = activeSession?.project ?? (ps.length === 1 ? ps[0] : null);
       if (initial && ps.includes(initial)) setProject(initial);
       else if (ps.length === 1) setProject(ps[0]);
     });
-  }, [activeSession]);
+  }, [activeSession, isEdit]);
 
   const amountCents = useMemo(() => parseAmount(amountText), [amountText]);
-  const canSave = !submitting && project !== null && amountCents !== null && amountCents > 0;
+  const canSave = loaded && !submitting && project !== null && amountCents !== null && amountCents > 0;
 
   const buildExpense = (): Expense => {
     const now = new Date().toISOString();
+    const base = originalRef.current;
     return {
       id: expenseIdRef.current,
       project: project!,
@@ -108,9 +138,9 @@ export default function ExpenseNewScreen() {
       billable,
       note: note.trim() || null,
       receiptImagePath: imagePath,
-      ocr: null,
+      ocr: base?.ocr ?? null,
       syncState: "queued",
-      createdAt: now,
+      createdAt: base?.createdAt ?? now,
       updatedAt: now,
       deleted: false,
     };
@@ -121,7 +151,11 @@ export default function ExpenseNewScreen() {
     setSubmitting(true);
     const expense = buildExpense();
     try {
-      await insertExpense(expense);
+      if (isEdit) {
+        await updateExpense(expense);
+      } else {
+        await insertExpense(expense);
+      }
       await enqueueExpense(expense.id);
       pushExpenseBestEffort(expense);
       await refresh();
@@ -130,7 +164,7 @@ export default function ExpenseNewScreen() {
       setError("Couldn't save the expense.");
       return;
     }
-    if (reopenCapture) {
+    if (reopenCapture && !isEdit) {
       expenseIdRef.current = Crypto.randomUUID().toUpperCase();
       setImagePath(null);
       setAmountText("");
@@ -175,12 +209,16 @@ export default function ExpenseNewScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: t.palette.cream50 }}>
+      <Stack.Screen options={{ title: isEdit ? "Edit expense" : "New expense" }} />
       <ScrollView
         contentContainerStyle={styles.body}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.hero}>
-          <Pressable onPress={retake} accessibilityLabel="Retake receipt">
+          <Pressable
+            onPress={isEdit ? undefined : retake}
+            accessibilityLabel={isEdit ? "Receipt photo" : "Retake receipt"}
+          >
             {imagePath ? (
               <Image
                 source={{ uri: imagePath }}
@@ -200,7 +238,7 @@ export default function ExpenseNewScreen() {
                 ]}
               >
                 <PCText tone="tertiary" variant="supporting">
-                  Retake
+                  {isEdit ? "No photo" : "Retake"}
                 </PCText>
               </View>
             )}
@@ -360,22 +398,24 @@ export default function ExpenseNewScreen() {
         />
 
         <View style={{ flexDirection: "row", gap: 10, marginTop: 24 }}>
+          {!isEdit ? (
+            <PCButton
+              label="Save & new"
+              variant="outline"
+              size="lg"
+              onPress={() => save(true)}
+              disabled={!canSave}
+              style={{ flex: 1 }}
+            />
+          ) : null}
           <PCButton
-            label="Save & new"
-            variant="outline"
-            size="lg"
-            onPress={() => save(true)}
-            disabled={!canSave}
-            style={{ flex: 1 }}
-          />
-          <PCButton
-            label="Save expense"
+            label={isEdit ? "Save changes" : "Save expense"}
             variant="filled"
             size="lg"
             onPress={() => save(false)}
             loading={submitting}
             disabled={!canSave}
-            style={{ flex: 1.2 }}
+            style={{ flex: isEdit ? 1 : 1.2 }}
           />
         </View>
         <PCButton

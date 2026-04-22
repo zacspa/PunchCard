@@ -1,4 +1,4 @@
-import { Image, View } from "react-native";
+import { Image, Pressable, View } from "react-native";
 import { Icon } from "react-native-paper";
 
 import { useTokens } from "@/lib/theme";
@@ -12,16 +12,16 @@ import { PCText } from "./PCText";
 type Props = {
   expense: Expense;
   showDivider?: boolean;
+  onPress?: () => void;
 };
 
-export const PCExpenseRow = ({ expense, showDivider = true }: Props) => {
+export const PCExpenseRow = ({ expense, showDivider = true, onPress }: Props) => {
   const t = useTokens();
   const isPending = expense.syncState !== "synced";
   const description = expense.note?.trim() || expense.category || null;
 
-  return (
-    <View>
-      <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 12, gap: 12 }}>
+  const Row = (
+    <View style={{ flexDirection: "row", alignItems: "center", paddingVertical: 12, gap: 12 }}>
         <Thumbnail imagePath={expense.receiptImagePath} />
         <View style={{ flex: 1, minWidth: 0 }}>
           <PCText
@@ -73,7 +73,18 @@ export const PCExpenseRow = ({ expense, showDivider = true }: Props) => {
         >
           {formatAmount(expense.amountCents, expense.currency)}
         </PCText>
-      </View>
+    </View>
+  );
+
+  return (
+    <View>
+      {onPress ? (
+        <Pressable onPress={onPress} android_ripple={{ color: t.palette.cream200 }}>
+          {Row}
+        </Pressable>
+      ) : (
+        Row
+      )}
       {showDivider ? <PCHairline /> : null}
     </View>
   );

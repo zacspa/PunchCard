@@ -21,8 +21,3 @@ export const persistReceiptImage = (sourceURI: string, expenseId: string): strin
   src.copy(dest);
   return dest.uri;
 };
-
-export const deleteReceiptImage = (path: string): void => {
-  const file = new File(path);
-  if (file.exists) file.delete();
-};

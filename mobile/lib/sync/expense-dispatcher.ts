@@ -1,7 +1,6 @@
 import { getProjectSyncConfig } from "../config/project-sync";
 import { getExpenseById, updateExpense } from "../db/expenses";
 import { dequeueExpense, enqueueExpense, listQueuedExpenses } from "../db/expense-queue";
-import { deleteReceiptImage } from "../storage/receipts";
 import type { Expense } from "../models/expense";
 import { buildExpenseEnvelope } from "./expense-payload";
 import { EXPENSE_TIMEOUT_MS, postEnvelope, type SyncResult } from "./client";
@@ -33,13 +32,6 @@ export const pushExpense = async (expense: Expense): Promise<SyncResult> => {
       updatedAt: new Date().toISOString(),
     };
     await updateExpense(synced);
-    // Free the on-device image now that it lives on Drive. The sheet row is
-    // the canonical copy; we can re-download if we ever need to.
-    if (expense.receiptImagePath) {
-      deleteReceiptImage(expense.receiptImagePath);
-      synced.receiptImagePath = null;
-      await updateExpense(synced);
-    }
   } else {
     await enqueueExpense(expense.id, result.message);
   }
