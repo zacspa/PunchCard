@@ -272,10 +272,10 @@ public struct SyncService {
             "action": "upsert-expenses",
             "expenses": [expense],
         ]
-        return try post(url: url, secret: config.sharedSecret, body: envelope, overallTimeout: 20)
+        return try post(url: url, secret: config.sharedSecret, body: envelope, overallTimeout: 20, requestTimeout: 18)
     }
 
-    private func post(url: URL, secret: String?, body: [String: Any], overallTimeout: TimeInterval = Self.overallTimeout) throws -> Int {
+    private func post(url: URL, secret: String?, body: [String: Any], overallTimeout: TimeInterval = Self.overallTimeout, requestTimeout: TimeInterval = Self.requestTimeout) throws -> Int {
         let jsonData = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         // Apps Script web apps can't reliably read custom request headers, so
         // we also carry the secret as a query parameter. Neither channel is
@@ -296,7 +296,7 @@ public struct SyncService {
             request.setValue(secret, forHTTPHeaderField: "X-PunchCard-Secret")
         }
         request.httpBody = jsonData
-        request.timeoutInterval = Self.requestTimeout
+        request.timeoutInterval = requestTimeout
 
         let session = URLSession(configuration: .ephemeral)
         defer { session.finishTasksAndInvalidate() }
