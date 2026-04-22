@@ -25,14 +25,13 @@ ln -sf $(pwd)/.build/release/punchcard ~/.local/bin/punchcard
 
 ### Claude Code skills (optional)
 
-Copy the skill files to make `/punch-in`, `/punch-out`, and `/invoice` available in Claude Code:
+Make `/punch-in`, `/punch-out`, `/invoice`, and `/expense` available in Claude Code by symlinking the skills into `~/.claude/commands/`:
 
 ```bash
-mkdir -p ~/.claude/commands
-cp skills/punch-in.md ~/.claude/commands/
-cp skills/punch-out.md ~/.claude/commands/
-cp skills/invoice.md ~/.claude/commands/
+./skills/install.sh
 ```
+
+The installer symlinks (not copies) so edits to `skills/*.md` take effect immediately. Re-run any time you add or remove a skill.
 
 ## Quick start
 

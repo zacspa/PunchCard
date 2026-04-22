@@ -21,6 +21,19 @@
  * RECEIPTS_FOLDER_NAME. The folder is created on first use and reused after.
  */
 
+/**
+ * Run once from the Apps Script editor (Run button with this function selected
+ * in the toolbar) to grant full Drive permissions. Touches both read
+ * (getFoldersByName) and write (createFolder) so Google asks for the full
+ * drive scope, not just drive.readonly. Creates then trashes a probe folder
+ * so there's no lingering state. Redeploy the Web App after approving.
+ */
+function authorizePunchCardDrive() {
+  DriveApp.getFoldersByName('__punchcard_auth_probe__');
+  var probe = DriveApp.createFolder('__punchcard_auth_probe__');
+  probe.setTrashed(true);
+}
+
 var PunchCardExpenses = (function () {
   var EXPENSES_SHEET_NAME = 'Expenses';
   var RECEIPTS_FOLDER_NAME = 'PunchCard Receipts';
