@@ -135,13 +135,14 @@ struct InvoicePDFGenerator {
             }
         }
 
-        drawTableHeader()
-
-        // Line items
         let rowFont = CTFontCreateWithName("Helvetica" as CFString, 10, nil)
         let monoFont = CTFontCreateWithName("Menlo" as CFString, 9, nil)
         let rowPadding: CGFloat = 6
-        inTableBody = true
+
+        if !invoice.lineItems.isEmpty {
+            drawTableHeader()
+            inTableBody = true
+        }
 
         for (index, item) in invoice.lineItems.enumerated() {
             let dateText = DateFormatting.formatDateOnly(item.date)
@@ -181,32 +182,34 @@ struct InvoicePDFGenerator {
 
         // Footer totals
         inTableBody = false
-        yPosition -= 10
         let paymentSpace: CGFloat = invoice.paymentMethod != nil ? 80 : 0
         checkPageBreakWithHeader(needed: 80 + paymentSpace)
 
-        drawHLine(y: yPosition, from: margin, to: pageWidth - margin, color: .black, width: 1.0, context: context)
-        yPosition -= 22
-
         let totalFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 12, nil)
         let valueNumFont = CTFontCreateWithName("Menlo" as CFString, 11, nil)
-
         let rightCol: CGFloat = pageWidth - margin - 150
-
         let rightEdge = pageWidth - margin
 
-        drawText("Total Hours:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
-        drawTextRightAligned(String(format: "%.2f", invoice.totalHours), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
-        yPosition -= 20
+        if !invoice.lineItems.isEmpty {
+            yPosition -= 10
+            drawHLine(y: yPosition, from: margin, to: pageWidth - margin, color: .black, width: 1.0, context: context)
+            yPosition -= 22
 
-        drawText("Rate:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
-        drawTextRightAligned(String(format: "$%.2f/hr", invoice.hourlyRate), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
-        yPosition -= 20
+            drawText("Total Hours:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
+            drawTextRightAligned(String(format: "%.2f", invoice.totalHours), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
+            yPosition -= 20
+
+            drawText("Rate:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
+            drawTextRightAligned(String(format: "$%.2f/hr", invoice.hourlyRate), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
+            yPosition -= 20
+        }
 
         if !invoice.expenses.isEmpty {
-            drawText("Services:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
-            drawTextRightAligned(String(format: "$%.2f", invoice.servicesAmount), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
-            yPosition -= 30
+            if !invoice.lineItems.isEmpty {
+                drawText("Services:", at: CGPoint(x: rightCol, y: yPosition), font: totalFont, color: .black, context: context)
+                drawTextRightAligned(String(format: "$%.2f", invoice.servicesAmount), rightEdge: rightEdge, y: yPosition, font: valueNumFont, color: .black, context: context)
+                yPosition -= 30
+            }
 
             // Expenses table — reuses the date/amount column layout as services.
             checkPageBreakWithHeader(needed: 80)

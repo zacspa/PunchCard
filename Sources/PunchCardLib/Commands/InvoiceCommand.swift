@@ -12,8 +12,8 @@ public struct Invoice: ParsableCommand {
     @Option(name: .long, help: "End date (yyyy-MM-dd).")
     var to: String
 
-    @Option(name: .long, help: "Hourly rate.")
-    var rate: Double
+    @Option(name: .long, help: "Hourly rate. Required unless --expenses-only.")
+    var rate: Double?
 
     @Option(name: .long, help: "Your name (invoice sender).")
     var name: String
@@ -45,6 +45,9 @@ public struct Invoice: ParsableCommand {
     @Flag(name: .long, help: "Pull billable expenses from the Google Sheet for this period.")
     var withExpenses: Bool = false
 
+    @Flag(name: .long, help: "Generate an expenses-only invoice (no hours/sessions). Implies --with-expenses.")
+    var expensesOnly: Bool = false
+
     public init() {}
 
     public func run() throws {
@@ -57,8 +60,14 @@ public struct Invoice: ParsableCommand {
         guard fromDate <= toDate else {
             throw ValidationError("--from date must be before or equal to --to date.")
         }
-        guard rate > 0 else {
-            throw ValidationError("--rate must be a positive number.")
+        let effectiveRate: Double
+        if expensesOnly {
+            effectiveRate = 0
+        } else {
+            guard let r = rate, r > 0 else {
+                throw ValidationError("--rate must be a positive number.")
+            }
+            effectiveRate = r
         }
 
         // Validate project name if provided
@@ -69,11 +78,15 @@ public struct Invoice: ParsableCommand {
             }
         }
 
-        let store = SessionStore()
-        let sessions = try store.listSessions(from: fromDate, to: toDate, project: project)
-
-        guard !sessions.isEmpty else {
-            throw PunchCardError.noSessionsInRange
+        let sessions: [Session]
+        if expensesOnly {
+            sessions = []
+        } else {
+            let store = SessionStore()
+            sessions = try store.listSessions(from: fromDate, to: toDate, project: project)
+            guard !sessions.isEmpty else {
+                throw PunchCardError.noSessionsInRange
+            }
         }
 
         let lineItems = sessions.map { session in
@@ -90,7 +103,7 @@ public struct Invoice: ParsableCommand {
         }
 
         var expenseItems: [InvoiceExpenseItem] = []
-        if withExpenses {
+        if withExpenses || expensesOnly {
             let fetch = ExpenseFetchService()
             do {
                 let remote = try fetch.fetchBillable(project: project, from: fromDate, to: toDate)
@@ -110,6 +123,10 @@ public struct Invoice: ParsableCommand {
             }
         }
 
+        if expensesOnly && expenseItems.isEmpty {
+            throw ValidationError("No billable expenses found in the sheet for this period.")
+        }
+
         let invoiceNumber = try InvoiceCounter.next()
         let invoiceData = InvoiceData(
             invoiceNumber: invoiceNumber,
@@ -117,7 +134,7 @@ public struct Invoice: ParsableCommand {
             client: client,
             fromDate: fromDate,
             toDate: toDate,
-            hourlyRate: rate,
+            hourlyRate: effectiveRate,
             lineItems: lineItems,
             expenses: expenseItems,
             logoPath: logo,
@@ -141,11 +158,15 @@ public struct Invoice: ParsableCommand {
 
         print("Invoice generated: \(outputURL.path)")
         print("  Period: \(DateFormatting.formatDateOnly(fromDate)) to \(DateFormatting.formatDateOnly(toDate))")
-        print("  Sessions: \(sessions.count)")
-        print("  Total hours: \(String(format: "%.2f", invoiceData.totalHours))")
-        print("  Rate: $\(String(format: "%.2f", rate))/hr")
+        if !lineItems.isEmpty {
+            print("  Sessions: \(sessions.count)")
+            print("  Total hours: \(String(format: "%.2f", invoiceData.totalHours))")
+            print("  Rate: $\(String(format: "%.2f", effectiveRate))/hr")
+        }
         if !expenseItems.isEmpty {
-            print("  Services: $\(String(format: "%.2f", invoiceData.servicesAmount))")
+            if !lineItems.isEmpty {
+                print("  Services: $\(String(format: "%.2f", invoiceData.servicesAmount))")
+            }
             print("  Expenses: \(expenseItems.count) item\(expenseItems.count == 1 ? "" : "s") — $\(String(format: "%.2f", invoiceData.expensesAmount))")
         }
         print("  Total: $\(String(format: "%.2f", invoiceData.totalAmount))")
